@@ -930,6 +930,62 @@
 #define WDTCONINV       PIC32_R (0x000C)
 
 /*
+ * Comparator voltage reference register
+ */
+#define CVRCON          PIC32_R (0x0140)    /* Comparator voltage reference control */
+#define CVRCONCLR       PIC32_R (0x0144)
+#define CVRCONSET       PIC32_R (0x0148)
+#define CVRCONINV       PIC32_R (0x014C)
+
+/*
+ * Comparator registers (CM1/CM2/CM3)
+ */
+#define CM1CON          PIC32_R (0x01C0)    /* Comparator 1 control */
+#define CM1CONCLR       PIC32_R (0x01C4)
+#define CM1CONSET       PIC32_R (0x01C8)
+#define CM1CONINV       PIC32_R (0x01CC)
+#define CM2CON          PIC32_R (0x0200)    /* Comparator 2 control */
+#define CM2CONCLR       PIC32_R (0x0204)
+#define CM2CONSET       PIC32_R (0x0208)
+#define CM2CONINV       PIC32_R (0x020C)
+#define CM3CON          PIC32_R (0x0240)    /* Comparator 3 control */
+#define CM3CONCLR       PIC32_R (0x0244)
+#define CM3CONSET       PIC32_R (0x0248)
+#define CM3CONINV       PIC32_R (0x024C)
+#define CMSTAT          PIC32_R (0x0280)    /* Comparator status */
+#define CMSTATCLR       PIC32_R (0x0284)
+#define CMSTATSET       PIC32_R (0x0288)
+#define CMSTATINV       PIC32_R (0x028C)
+
+/*
+ * Real-Time Clock and Calendar (RTCC) registers
+ */
+#define RTCCON          PIC32_R (0x1000)    /* RTCC control */
+#define RTCCONCLR       PIC32_R (0x1004)
+#define RTCCONSET       PIC32_R (0x1008)
+#define RTCCONINV       PIC32_R (0x100C)
+#define RTCALRM         PIC32_R (0x1010)    /* RTCC alarm control */
+#define RTCALRMCLR      PIC32_R (0x1014)
+#define RTCALRMSET      PIC32_R (0x1018)
+#define RTCALRMINV      PIC32_R (0x101C)
+#define RTCTIME         PIC32_R (0x1020)    /* RTCC time value */
+#define RTCTIMECLR      PIC32_R (0x1024)
+#define RTCTIMESET      PIC32_R (0x1028)
+#define RTCTIMEINV      PIC32_R (0x102C)
+#define RTCDATE         PIC32_R (0x1030)    /* RTCC date value */
+#define RTCDATECLR      PIC32_R (0x1034)
+#define RTCDATESET      PIC32_R (0x1038)
+#define RTCDATEINV      PIC32_R (0x103C)
+#define ALRMTIME        PIC32_R (0x1040)    /* RTCC alarm time value */
+#define ALRMTIMECLR     PIC32_R (0x1044)
+#define ALRMTIMESET     PIC32_R (0x1048)
+#define ALRMTIMEINV     PIC32_R (0x104C)
+#define ALRMDATE        PIC32_R (0x1050)    /* RTCC alarm date value */
+#define ALRMDATECLR     PIC32_R (0x1054)
+#define ALRMDATESET     PIC32_R (0x1058)
+#define ALRMDATEINV     PIC32_R (0x105C)
+
+/*
  * Timer 1 registers (16-bit Type A)
  */
 #define T1CON           PIC32_R (0x0600)    /* Control */

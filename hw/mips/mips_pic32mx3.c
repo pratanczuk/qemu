@@ -385,6 +385,29 @@ static void io_reset(pic32_t *s)
     VALUE(WDTCON) = 0;
 
     /*
+     * Reset Comparator voltage reference.
+     */
+    VALUE(CVRCON) = 0;
+
+    /*
+     * Reset Comparators.
+     */
+    VALUE(CM1CON) = 0;
+    VALUE(CM2CON) = 0;
+    VALUE(CM3CON) = 0;
+    VALUE(CMSTAT) = 0;
+
+    /*
+     * Reset Real-Time Clock and Calendar.
+     */
+    VALUE(RTCCON)   = 0;
+    VALUE(RTCALRM)  = 0;
+    VALUE(RTCTIME)  = 0;
+    VALUE(RTCDATE)  = 0;
+    VALUE(ALRMTIME) = 0;
+    VALUE(ALRMDATE) = 0;
+
+    /*
      * Reset Timers T1-T5.
      */
     VALUE(T1CON) = 0;
@@ -728,6 +751,29 @@ static unsigned io_read32(pic32_t *s, unsigned offset, const char **namep)
      * Watchdog timer.
      */
     STORAGE(WDTCON); break;
+
+    /*-------------------------------------------------------------------------
+     * Comparator voltage reference.
+     */
+    STORAGE(CVRCON); break;
+
+    /*-------------------------------------------------------------------------
+     * Comparators.
+     */
+    STORAGE(CM1CON); break;
+    STORAGE(CM2CON); break;
+    STORAGE(CM3CON); break;
+    STORAGE(CMSTAT); break;
+
+    /*-------------------------------------------------------------------------
+     * Real-Time Clock and Calendar.
+     */
+    STORAGE(RTCCON); break;
+    STORAGE(RTCALRM); break;
+    STORAGE(RTCTIME); break;
+    STORAGE(RTCDATE); break;
+    STORAGE(ALRMTIME); break;
+    STORAGE(ALRMDATE); break;
 
     /*-------------------------------------------------------------------------
      * Timers T1-T5.
@@ -1096,6 +1142,29 @@ irq:    update_irq_status(s);
      * Watchdog timer.
      */
     WRITEOP(WDTCON); return;
+
+    /*-------------------------------------------------------------------------
+     * Comparator voltage reference.
+     */
+    WRITEOP(CVRCON); return;
+
+    /*-------------------------------------------------------------------------
+     * Comparators.
+     */
+    WRITEOP(CM1CON); return;
+    WRITEOP(CM2CON); return;
+    WRITEOP(CM3CON); return;
+    WRITEOP(CMSTAT); return;
+
+    /*-------------------------------------------------------------------------
+     * Real-Time Clock and Calendar.
+     */
+    WRITEOP(RTCCON); return;
+    WRITEOP(RTCALRM); return;
+    WRITEOP(RTCTIME); return;
+    WRITEOP(RTCDATE); return;
+    WRITEOP(ALRMTIME); return;
+    WRITEOP(ALRMDATE); return;
 
     /*-------------------------------------------------------------------------
      * Timers T1-T5.
