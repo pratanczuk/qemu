@@ -63,6 +63,23 @@
 #define U2BRGSET        PIC32_R (0x6248)
 #define U2BRGINV        PIC32_R (0x624C)
 #endif
+#ifdef PIC32MX3
+/* MX3xx: U2 at same address as MX4 */
+#define U2MODE          PIC32_R (0x6200) /* Mode */
+#define U2MODECLR       PIC32_R (0x6204)
+#define U2MODESET       PIC32_R (0x6208)
+#define U2MODEINV       PIC32_R (0x620C)
+#define U2STA           PIC32_R (0x6210) /* Status and control */
+#define U2STACLR        PIC32_R (0x6214)
+#define U2STASET        PIC32_R (0x6218)
+#define U2STAINV        PIC32_R (0x621C)
+#define U2TXREG         PIC32_R (0x6220) /* Transmit */
+#define U2RXREG         PIC32_R (0x6230) /* Receive */
+#define U2BRG           PIC32_R (0x6240) /* Baud rate */
+#define U2BRGCLR        PIC32_R (0x6244)
+#define U2BRGSET        PIC32_R (0x6248)
+#define U2BRGINV        PIC32_R (0x624C)
+#endif
 #ifdef PIC32MX7
 #define U4MODE          PIC32_R (0x6200) /* Mode */
 #define U4MODECLR       PIC32_R (0x6204)
@@ -656,6 +673,36 @@
 #define SPI1BRGCLR      PIC32_R (0x5834)
 #define SPI1BRGSET      PIC32_R (0x5838)
 #define SPI1BRGINV      PIC32_R (0x583C)
+#endif
+#ifdef PIC32MX3
+/* MX3xx SPI: SPI3 at 0x5800, SPI2 at 0x5A00, SPI1 at 0x5E00 */
+#define SPI3CON         PIC32_R (0x5800) /* Control */
+#define SPI3CONCLR      PIC32_R (0x5804)
+#define SPI3CONSET      PIC32_R (0x5808)
+#define SPI3CONINV      PIC32_R (0x580C)
+#define SPI3STAT        PIC32_R (0x5810) /* Status */
+#define SPI3STATCLR     PIC32_R (0x5814)
+#define SPI3STATSET     PIC32_R (0x5818)
+#define SPI3STATINV     PIC32_R (0x581C)
+#define SPI3BUF         PIC32_R (0x5820) /* Transmit and receive buffer */
+#define SPI3BRG         PIC32_R (0x5830) /* Baud rate generator */
+#define SPI3BRGCLR      PIC32_R (0x5834)
+#define SPI3BRGSET      PIC32_R (0x5838)
+#define SPI3BRGINV      PIC32_R (0x583C)
+
+#define SPI1CON         PIC32_R (0x5E00) /* Control */
+#define SPI1CONCLR      PIC32_R (0x5E04)
+#define SPI1CONSET      PIC32_R (0x5E08)
+#define SPI1CONINV      PIC32_R (0x5E0C)
+#define SPI1STAT        PIC32_R (0x5E10) /* Status */
+#define SPI1STATCLR     PIC32_R (0x5E14)
+#define SPI1STATSET     PIC32_R (0x5E18)
+#define SPI1STATINV     PIC32_R (0x5E1C)
+#define SPI1BUF         PIC32_R (0x5E20) /* Transmit and receive buffer */
+#define SPI1BRG         PIC32_R (0x5E30) /* Baud rate generator */
+#define SPI1BRGCLR      PIC32_R (0x5E34)
+#define SPI1BRGSET      PIC32_R (0x5E38)
+#define SPI1BRGINV      PIC32_R (0x5E3C)
 #endif
 #ifdef PIC32MX7
 #define SPI3CON         PIC32_R (0x5800) /* Control */
