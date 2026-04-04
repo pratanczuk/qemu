@@ -33,6 +33,7 @@
 #include "hw/loader.h"
 #include "qemu/error-report.h"
 #include "hw/empty_slot.h"
+#include "elf.h"
 #include <termios.h>
 
 #define PIC32MX3
@@ -160,7 +161,7 @@ static void update_irq_status(pic32_t *s)
         (VALUE(IFS1) & VALUE(IEC1)) ||
         (VALUE(IFS2) & VALUE(IEC2)))
     {
-        /* Find the most prioritive pending interrupt,
+        /* Find the most prioritized pending interrupt,
          * it's vector and level. */
         int irq;
         for (irq=0; irq<sizeof(irq_to_vector)/sizeof(int); irq++) {
@@ -377,6 +378,82 @@ static void io_reset(pic32_t *s)
         s->spi[i].rfifo = 0;
         s->spi[i].wfifo = 0;
     }
+
+    /*
+     * Reset Watchdog timer.
+     */
+    VALUE(WDTCON) = 0;
+
+    /*
+     * Reset Timers T1-T5.
+     */
+    VALUE(T1CON) = 0;
+    VALUE(TMR1)  = 0;
+    VALUE(PR1)   = 0xFFFF;
+
+    VALUE(T2CON) = 0;
+    VALUE(TMR2)  = 0;
+    VALUE(PR2)   = 0xFFFF;
+
+    VALUE(T3CON) = 0;
+    VALUE(TMR3)  = 0;
+    VALUE(PR3)   = 0xFFFF;
+
+    VALUE(T4CON) = 0;
+    VALUE(TMR4)  = 0;
+    VALUE(PR4)   = 0xFFFF;
+
+    VALUE(T5CON) = 0;
+    VALUE(TMR5)  = 0;
+    VALUE(PR5)   = 0xFFFF;
+
+    /*
+     * Reset Input Capture IC1-IC5.
+     */
+    VALUE(IC1CON) = 0;
+    VALUE(IC2CON) = 0;
+    VALUE(IC3CON) = 0;
+    VALUE(IC4CON) = 0;
+    VALUE(IC5CON) = 0;
+
+    /*
+     * Reset Output Compare OC1-OC5.
+     */
+    VALUE(OC1CON) = 0;  VALUE(OC1R) = 0;  VALUE(OC1RS) = 0;
+    VALUE(OC2CON) = 0;  VALUE(OC2R) = 0;  VALUE(OC2RS) = 0;
+    VALUE(OC3CON) = 0;  VALUE(OC3R) = 0;  VALUE(OC3RS) = 0;
+    VALUE(OC4CON) = 0;  VALUE(OC4R) = 0;  VALUE(OC4RS) = 0;
+    VALUE(OC5CON) = 0;  VALUE(OC5R) = 0;  VALUE(OC5RS) = 0;
+
+    /*
+     * Reset I2C modules I2C1 and I2C2.
+     */
+    VALUE(I2C1CON)  = 0;
+    VALUE(I2C1STAT) = 0;
+    VALUE(I2C1ADD)  = 0;
+    VALUE(I2C1MSK)  = 0;
+    VALUE(I2C1BRG)  = 0;
+    VALUE(I2C1TRN)  = 0xFF;
+    VALUE(I2C1RCV)  = 0;
+
+    VALUE(I2C2CON)  = 0;
+    VALUE(I2C2STAT) = 0;
+    VALUE(I2C2ADD)  = 0;
+    VALUE(I2C2MSK)  = 0;
+    VALUE(I2C2BRG)  = 0;
+    VALUE(I2C2TRN)  = 0xFF;
+    VALUE(I2C2RCV)  = 0;
+
+    /*
+     * Reset Parallel Master Port.
+     */
+    VALUE(PMCON)  = 0;
+    VALUE(PMMODE) = 0;
+    VALUE(PMADDR) = 0;
+    VALUE(PMDOUT) = 0;
+    VALUE(PMDIN)  = 0;
+    VALUE(PMAEN)  = 0;
+    VALUE(PMSTAT) = 0;
 }
 
 static unsigned io_read32(pic32_t *s, unsigned offset, const char **namep)
@@ -646,6 +723,96 @@ static unsigned io_read32(pic32_t *s, unsigned offset, const char **namep)
     STORAGE(SPI3BRGCLR); *bufp = 0; break;
     STORAGE(SPI3BRGSET); *bufp = 0; break;
     STORAGE(SPI3BRGINV); *bufp = 0; break;
+
+    /*-------------------------------------------------------------------------
+     * Watchdog timer.
+     */
+    STORAGE(WDTCON); break;
+
+    /*-------------------------------------------------------------------------
+     * Timers T1-T5.
+     */
+    STORAGE(T1CON); break;
+    STORAGE(TMR1); break;
+    STORAGE(PR1); break;
+    STORAGE(T2CON); break;
+    STORAGE(TMR2); break;
+    STORAGE(PR2); break;
+    STORAGE(T3CON); break;
+    STORAGE(TMR3); break;
+    STORAGE(PR3); break;
+    STORAGE(T4CON); break;
+    STORAGE(TMR4); break;
+    STORAGE(PR4); break;
+    STORAGE(T5CON); break;
+    STORAGE(TMR5); break;
+    STORAGE(PR5); break;
+
+    /*-------------------------------------------------------------------------
+     * Input Capture IC1-IC5.
+     */
+    STORAGE(IC1CON); break;
+    STORAGE(IC1BUF); break;
+    STORAGE(IC2CON); break;
+    STORAGE(IC2BUF); break;
+    STORAGE(IC3CON); break;
+    STORAGE(IC3BUF); break;
+    STORAGE(IC4CON); break;
+    STORAGE(IC4BUF); break;
+    STORAGE(IC5CON); break;
+    STORAGE(IC5BUF); break;
+
+    /*-------------------------------------------------------------------------
+     * Output Compare OC1-OC5.
+     */
+    STORAGE(OC1CON); break;
+    STORAGE(OC1R); break;
+    STORAGE(OC1RS); break;
+    STORAGE(OC2CON); break;
+    STORAGE(OC2R); break;
+    STORAGE(OC2RS); break;
+    STORAGE(OC3CON); break;
+    STORAGE(OC3R); break;
+    STORAGE(OC3RS); break;
+    STORAGE(OC4CON); break;
+    STORAGE(OC4R); break;
+    STORAGE(OC4RS); break;
+    STORAGE(OC5CON); break;
+    STORAGE(OC5R); break;
+    STORAGE(OC5RS); break;
+
+    /*-------------------------------------------------------------------------
+     * I2C 1.
+     */
+    STORAGE(I2C1CON); break;
+    STORAGE(I2C1STAT); break;
+    STORAGE(I2C1ADD); break;
+    STORAGE(I2C1MSK); break;
+    STORAGE(I2C1BRG); break;
+    STORAGE(I2C1TRN); break;
+    STORAGE(I2C1RCV); break;
+
+    /*-------------------------------------------------------------------------
+     * I2C 2.
+     */
+    STORAGE(I2C2CON); break;
+    STORAGE(I2C2STAT); break;
+    STORAGE(I2C2ADD); break;
+    STORAGE(I2C2MSK); break;
+    STORAGE(I2C2BRG); break;
+    STORAGE(I2C2TRN); break;
+    STORAGE(I2C2RCV); break;
+
+    /*-------------------------------------------------------------------------
+     * Parallel Master Port.
+     */
+    STORAGE(PMCON); break;
+    STORAGE(PMMODE); break;
+    STORAGE(PMADDR); break;
+    STORAGE(PMDOUT); break;
+    STORAGE(PMDIN); break;
+    STORAGE(PMAEN); break;
+    STORAGE(PMSTAT); break;
 
     default:
         printf("--- Read 1f8%05x: peripheral register not supported\n",
@@ -925,6 +1092,91 @@ irq:    update_irq_status(s);
         return;
     WRITEOP(SPI3BRG); return;                       // Baud rate
 
+    /*-------------------------------------------------------------------------
+     * Watchdog timer.
+     */
+    WRITEOP(WDTCON); return;
+
+    /*-------------------------------------------------------------------------
+     * Timers T1-T5.
+     */
+    WRITEOP(T1CON); return;
+    WRITEOP(TMR1); return;
+    WRITEOP(PR1); return;
+    WRITEOP(T2CON); return;
+    WRITEOP(TMR2); return;
+    WRITEOP(PR2); return;
+    WRITEOP(T3CON); return;
+    WRITEOP(TMR3); return;
+    WRITEOP(PR3); return;
+    WRITEOP(T4CON); return;
+    WRITEOP(TMR4); return;
+    WRITEOP(PR4); return;
+    WRITEOP(T5CON); return;
+    WRITEOP(TMR5); return;
+    WRITEOP(PR5); return;
+
+    /*-------------------------------------------------------------------------
+     * Input Capture IC1-IC5.
+     */
+    WRITEOP(IC1CON); return;
+    WRITEOP(IC2CON); return;
+    WRITEOP(IC3CON); return;
+    WRITEOP(IC4CON); return;
+    WRITEOP(IC5CON); return;
+
+    /*-------------------------------------------------------------------------
+     * Output Compare OC1-OC5.
+     */
+    WRITEOP(OC1CON); return;
+    WRITEOP(OC1R); return;
+    WRITEOP(OC1RS); return;
+    WRITEOP(OC2CON); return;
+    WRITEOP(OC2R); return;
+    WRITEOP(OC2RS); return;
+    WRITEOP(OC3CON); return;
+    WRITEOP(OC3R); return;
+    WRITEOP(OC3RS); return;
+    WRITEOP(OC4CON); return;
+    WRITEOP(OC4R); return;
+    WRITEOP(OC4RS); return;
+    WRITEOP(OC5CON); return;
+    WRITEOP(OC5R); return;
+    WRITEOP(OC5RS); return;
+
+    /*-------------------------------------------------------------------------
+     * I2C 1.
+     */
+    WRITEOP(I2C1CON); return;
+    WRITEOPR(I2C1STAT, PIC32_I2CSTAT_TBF); return;  // TBF is read-only
+    WRITEOP(I2C1ADD); return;
+    WRITEOP(I2C1MSK); return;
+    WRITEOP(I2C1BRG); return;
+    STORAGE(I2C1TRN); break;    // Transmit: write-only data register
+    READONLY(I2C1RCV);          // Receive: read-only
+
+    /*-------------------------------------------------------------------------
+     * I2C 2.
+     */
+    WRITEOP(I2C2CON); return;
+    WRITEOPR(I2C2STAT, PIC32_I2CSTAT_TBF); return;  // TBF is read-only
+    WRITEOP(I2C2ADD); return;
+    WRITEOP(I2C2MSK); return;
+    WRITEOP(I2C2BRG); return;
+    STORAGE(I2C2TRN); break;    // Transmit: write-only data register
+    READONLY(I2C2RCV);          // Receive: read-only
+
+    /*-------------------------------------------------------------------------
+     * Parallel Master Port.
+     */
+    WRITEOP(PMCON); return;
+    WRITEOP(PMMODE); return;
+    WRITEOP(PMADDR); return;
+    WRITEOP(PMDOUT); return;
+    STORAGE(PMDIN); break;
+    WRITEOP(PMAEN); return;
+    READONLY(PMSTAT);
+
     default:
         printf("--- Write %08x to 1f8%05x: peripheral register not supported\n",
             data, offset);
@@ -1138,14 +1390,53 @@ static void pic32_init(MachineState *machine, int board_type)
     }
     prog_ptr = memory_region_get_ram_ptr(prog_mem);
     boot_ptr = memory_region_get_ram_ptr(boot_mem);
-    if (bios_name)
-        pic32_load_hex_file(bios_name, store_byte);
-    pic32_load_hex_file(machine->kernel_filename, store_byte);
 
+    /* Map flash into address space before ELF loading (rom infrastructure
+     * writes via cpu_physical_memory_write_rom which requires mapped regions). */
     memory_region_set_readonly(boot_mem, true);
     memory_region_set_readonly(prog_mem, true);
     memory_region_add_subregion(system_memory, BOOT_FLASH_START, boot_mem);
     memory_region_add_subregion(system_memory, PROGRAM_FLASH_START, prog_mem);
+
+    /* Detect ELF magic to choose the loading path. */
+    {
+        FILE *fp = fopen(machine->kernel_filename, "rb");
+        unsigned char magic[4] = {0};
+        if (fp) {
+            fread(magic, 1, 4, fp);
+            fclose(fp);
+        }
+        if (magic[0] == 0x7f && magic[1] == 'E' &&
+            magic[2] == 'L'  && magic[3] == 'F')
+        {
+            /* ELF firmware image: load via QEMU rom infrastructure. */
+            uint64_t elf_entry;
+            const int big_endian = 0;   /* MIPS32 little-endian */
+            const int clear_lsb = 0;    /* Not ARM Thumb mode */
+            int elf_size = load_elf(machine->kernel_filename,
+                                    cpu_mips_kseg0_to_phys, NULL,
+                                    &elf_entry, NULL, NULL,
+                                    big_endian,
+                                    EM_MIPS,
+                                    clear_lsb);
+            if (elf_size < 0) {
+                error_report("Failed to load ELF firmware '%s' (error %d)",
+                             machine->kernel_filename, elf_size);
+                exit(1);
+            }
+            printf("Firmware: ELF, %d bytes, entry 0x%08llx\n",
+                   elf_size, (unsigned long long) elf_entry);
+            if (bios_name) {
+                /* Optional boot ROM as hex/srec alongside ELF kernel. */
+                pic32_load_hex_file(bios_name, store_byte);
+            }
+        } else {
+            /* Intel HEX or Motorola SREC firmware image. */
+            if (bios_name)
+                pic32_load_hex_file(bios_name, store_byte);
+            pic32_load_hex_file(machine->kernel_filename, store_byte);
+        }
+    }
 
     /* Init internal devices */
     s->irq_raise = irq_raise;

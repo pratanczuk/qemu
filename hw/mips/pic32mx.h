@@ -922,29 +922,259 @@
 #define PIC32_NVMCON_WR         0x00008000
 
 /*
- * Timer2 registers
- */
-#define T2CON           PIC32_R (0x0800)
-#define T2CONSET        PIC32_R (0x0808)
-#define TMR2            PIC32_R (0x0810)
-#define PR2             PIC32_R (0x0820)
-
-/*
- * Output compare registers
- */
-#define OC1CON          PIC32_R (0x3000)
-#define OC1R            PIC32_R (0x3010)
-#define OC1RS           PIC32_R (0x3020)
-#define OC4CON          PIC32_R (0x3600)
-#define OC4R            PIC32_R (0x3610)
-#define OC4RS           PIC32_R (0x3620)
-
-/*
- * Watchdog registers
+ * Watchdog timer registers
  */
 #define WDTCON          PIC32_R (0x0000)    /* Watchdog timer control */
 #define WDTCONCLR       PIC32_R (0x0004)
 #define WDTCONSET       PIC32_R (0x0008)
+#define WDTCONINV       PIC32_R (0x000C)
+
+/*
+ * Timer 1 registers (16-bit Type A)
+ */
+#define T1CON           PIC32_R (0x0600)    /* Control */
+#define T1CONCLR        PIC32_R (0x0604)
+#define T1CONSET        PIC32_R (0x0608)
+#define T1CONINV        PIC32_R (0x060C)
+#define TMR1            PIC32_R (0x0610)    /* Count */
+#define TMR1CLR         PIC32_R (0x0614)
+#define TMR1SET         PIC32_R (0x0618)
+#define TMR1INV         PIC32_R (0x061C)
+#define PR1             PIC32_R (0x0620)    /* Period */
+#define PR1CLR          PIC32_R (0x0624)
+#define PR1SET          PIC32_R (0x0628)
+#define PR1INV          PIC32_R (0x062C)
+
+/*
+ * Timer 2/3 registers (16/32-bit Type B)
+ */
+#define T2CON           PIC32_R (0x0800)    /* Control */
+#define T2CONCLR        PIC32_R (0x0804)
+#define T2CONSET        PIC32_R (0x0808)
+#define T2CONINV        PIC32_R (0x080C)
+#define TMR2            PIC32_R (0x0810)    /* Count */
+#define TMR2CLR         PIC32_R (0x0814)
+#define TMR2SET         PIC32_R (0x0818)
+#define TMR2INV         PIC32_R (0x081C)
+#define PR2             PIC32_R (0x0820)    /* Period */
+#define PR2CLR          PIC32_R (0x0824)
+#define PR2SET          PIC32_R (0x0828)
+#define PR2INV          PIC32_R (0x082C)
+
+#define T3CON           PIC32_R (0x0A00)    /* Control */
+#define T3CONCLR        PIC32_R (0x0A04)
+#define T3CONSET        PIC32_R (0x0A08)
+#define T3CONINV        PIC32_R (0x0A0C)
+#define TMR3            PIC32_R (0x0A10)    /* Count */
+#define TMR3CLR         PIC32_R (0x0A14)
+#define TMR3SET         PIC32_R (0x0A18)
+#define TMR3INV         PIC32_R (0x0A1C)
+#define PR3             PIC32_R (0x0A20)    /* Period */
+#define PR3CLR          PIC32_R (0x0A24)
+#define PR3SET          PIC32_R (0x0A28)
+#define PR3INV          PIC32_R (0x0A2C)
+
+/*
+ * Timer 4/5 registers (16/32-bit Type B)
+ */
+#define T4CON           PIC32_R (0x0C00)    /* Control */
+#define T4CONCLR        PIC32_R (0x0C04)
+#define T4CONSET        PIC32_R (0x0C08)
+#define T4CONINV        PIC32_R (0x0C0C)
+#define TMR4            PIC32_R (0x0C10)    /* Count */
+#define TMR4CLR         PIC32_R (0x0C14)
+#define TMR4SET         PIC32_R (0x0C18)
+#define TMR4INV         PIC32_R (0x0C1C)
+#define PR4             PIC32_R (0x0C20)    /* Period */
+#define PR4CLR          PIC32_R (0x0C24)
+#define PR4SET          PIC32_R (0x0C28)
+#define PR4INV          PIC32_R (0x0C2C)
+
+#define T5CON           PIC32_R (0x0E00)    /* Control */
+#define T5CONCLR        PIC32_R (0x0E04)
+#define T5CONSET        PIC32_R (0x0E08)
+#define T5CONINV        PIC32_R (0x0E0C)
+#define TMR5            PIC32_R (0x0E10)    /* Count */
+#define TMR5CLR         PIC32_R (0x0E14)
+#define TMR5SET         PIC32_R (0x0E18)
+#define TMR5INV         PIC32_R (0x0E1C)
+#define PR5             PIC32_R (0x0E20)    /* Period */
+#define PR5CLR          PIC32_R (0x0E24)
+#define PR5SET          PIC32_R (0x0E28)
+#define PR5INV          PIC32_R (0x0E2C)
+
+/*
+ * Input Capture registers (IC1-IC5)
+ */
+#define IC1CON          PIC32_R (0x2000)    /* Control */
+#define IC1CONCLR       PIC32_R (0x2004)
+#define IC1CONSET       PIC32_R (0x2008)
+#define IC1CONINV       PIC32_R (0x200C)
+#define IC1BUF          PIC32_R (0x2010)    /* Capture buffer */
+
+#define IC2CON          PIC32_R (0x2200)
+#define IC2CONCLR       PIC32_R (0x2204)
+#define IC2CONSET       PIC32_R (0x2208)
+#define IC2CONINV       PIC32_R (0x220C)
+#define IC2BUF          PIC32_R (0x2210)
+
+#define IC3CON          PIC32_R (0x2400)
+#define IC3CONCLR       PIC32_R (0x2404)
+#define IC3CONSET       PIC32_R (0x2408)
+#define IC3CONINV       PIC32_R (0x240C)
+#define IC3BUF          PIC32_R (0x2410)
+
+#define IC4CON          PIC32_R (0x2600)
+#define IC4CONCLR       PIC32_R (0x2604)
+#define IC4CONSET       PIC32_R (0x2608)
+#define IC4CONINV       PIC32_R (0x260C)
+#define IC4BUF          PIC32_R (0x2610)
+
+#define IC5CON          PIC32_R (0x2800)
+#define IC5CONCLR       PIC32_R (0x2804)
+#define IC5CONSET       PIC32_R (0x2808)
+#define IC5CONINV       PIC32_R (0x280C)
+#define IC5BUF          PIC32_R (0x2810)
+
+/*
+ * Output Compare registers (OC1-OC5)
+ */
+#define OC1CON          PIC32_R (0x3000)    /* Control */
+#define OC1CONCLR       PIC32_R (0x3004)
+#define OC1CONSET       PIC32_R (0x3008)
+#define OC1CONINV       PIC32_R (0x300C)
+#define OC1R            PIC32_R (0x3010)    /* Secondary compare */
+#define OC1RCLR         PIC32_R (0x3014)
+#define OC1RSET         PIC32_R (0x3018)
+#define OC1RINV         PIC32_R (0x301C)
+#define OC1RS           PIC32_R (0x3020)    /* Primary compare */
+#define OC1RSCLR        PIC32_R (0x3024)
+#define OC1RSSET        PIC32_R (0x3028)
+#define OC1RSINV        PIC32_R (0x302C)
+
+#define OC2CON          PIC32_R (0x3200)
+#define OC2CONCLR       PIC32_R (0x3204)
+#define OC2CONSET       PIC32_R (0x3208)
+#define OC2CONINV       PIC32_R (0x320C)
+#define OC2R            PIC32_R (0x3210)
+#define OC2RCLR         PIC32_R (0x3214)
+#define OC2RSET         PIC32_R (0x3218)
+#define OC2RINV         PIC32_R (0x321C)
+#define OC2RS           PIC32_R (0x3220)
+#define OC2RSCLR        PIC32_R (0x3224)
+#define OC2RSSET        PIC32_R (0x3228)
+#define OC2RSINV        PIC32_R (0x322C)
+
+#define OC3CON          PIC32_R (0x3400)
+#define OC3CONCLR       PIC32_R (0x3404)
+#define OC3CONSET       PIC32_R (0x3408)
+#define OC3CONINV       PIC32_R (0x340C)
+#define OC3R            PIC32_R (0x3410)
+#define OC3RCLR         PIC32_R (0x3414)
+#define OC3RSET         PIC32_R (0x3418)
+#define OC3RINV         PIC32_R (0x341C)
+#define OC3RS           PIC32_R (0x3420)
+#define OC3RSCLR        PIC32_R (0x3424)
+#define OC3RSSET        PIC32_R (0x3428)
+#define OC3RSINV        PIC32_R (0x342C)
+
+#define OC4CON          PIC32_R (0x3600)
+#define OC4CONCLR       PIC32_R (0x3604)
+#define OC4CONSET       PIC32_R (0x3608)
+#define OC4CONINV       PIC32_R (0x360C)
+#define OC4R            PIC32_R (0x3610)
+#define OC4RCLR         PIC32_R (0x3614)
+#define OC4RSET         PIC32_R (0x3618)
+#define OC4RINV         PIC32_R (0x361C)
+#define OC4RS           PIC32_R (0x3620)
+#define OC4RSCLR        PIC32_R (0x3624)
+#define OC4RSSET        PIC32_R (0x3628)
+#define OC4RSINV        PIC32_R (0x362C)
+
+#define OC5CON          PIC32_R (0x3800)
+#define OC5CONCLR       PIC32_R (0x3804)
+#define OC5CONSET       PIC32_R (0x3808)
+#define OC5CONINV       PIC32_R (0x380C)
+#define OC5R            PIC32_R (0x3810)
+#define OC5RCLR         PIC32_R (0x3814)
+#define OC5RSET         PIC32_R (0x3818)
+#define OC5RINV         PIC32_R (0x381C)
+#define OC5RS           PIC32_R (0x3820)
+#define OC5RSCLR        PIC32_R (0x3824)
+#define OC5RSSET        PIC32_R (0x3828)
+#define OC5RSINV        PIC32_R (0x382C)
+
+/*
+ * I2C registers (I2C1 and I2C2)
+ */
+#define I2C1CON         PIC32_R (0x5000)    /* Control */
+#define I2C1CONCLR      PIC32_R (0x5004)
+#define I2C1CONSET      PIC32_R (0x5008)
+#define I2C1CONINV      PIC32_R (0x500C)
+#define I2C1STAT        PIC32_R (0x5010)    /* Status */
+#define I2C1STATCLR     PIC32_R (0x5014)
+#define I2C1STATSET     PIC32_R (0x5018)
+#define I2C1STATINV     PIC32_R (0x501C)
+#define I2C1ADD         PIC32_R (0x5020)    /* Address */
+#define I2C1ADDCLR      PIC32_R (0x5024)
+#define I2C1ADDSET      PIC32_R (0x5028)
+#define I2C1ADDINV      PIC32_R (0x502C)
+#define I2C1MSK         PIC32_R (0x5030)    /* Address mask */
+#define I2C1MSKCLR      PIC32_R (0x5034)
+#define I2C1MSKSET      PIC32_R (0x5038)
+#define I2C1MSKINV      PIC32_R (0x503C)
+#define I2C1BRG         PIC32_R (0x5040)    /* Baud rate */
+#define I2C1BRGCLR      PIC32_R (0x5044)
+#define I2C1BRGSET      PIC32_R (0x5048)
+#define I2C1BRGINV      PIC32_R (0x504C)
+#define I2C1TRN         PIC32_R (0x5050)    /* Transmit */
+#define I2C1TRNCLR      PIC32_R (0x5054)
+#define I2C1TRNSET      PIC32_R (0x5058)
+#define I2C1TRNINV      PIC32_R (0x505C)
+#define I2C1RCV         PIC32_R (0x5060)    /* Receive */
+
+#define I2C2CON         PIC32_R (0x5100)    /* Control */
+#define I2C2CONCLR      PIC32_R (0x5104)
+#define I2C2CONSET      PIC32_R (0x5108)
+#define I2C2CONINV      PIC32_R (0x510C)
+#define I2C2STAT        PIC32_R (0x5110)    /* Status */
+#define I2C2STATCLR     PIC32_R (0x5114)
+#define I2C2STATSET     PIC32_R (0x5118)
+#define I2C2STATINV     PIC32_R (0x511C)
+#define I2C2ADD         PIC32_R (0x5120)    /* Address */
+#define I2C2ADDCLR      PIC32_R (0x5124)
+#define I2C2ADDSET      PIC32_R (0x5128)
+#define I2C2ADDINV      PIC32_R (0x512C)
+#define I2C2MSK         PIC32_R (0x5130)    /* Address mask */
+#define I2C2MSKCLR      PIC32_R (0x5134)
+#define I2C2MSKSET      PIC32_R (0x5138)
+#define I2C2MSKINV      PIC32_R (0x513C)
+#define I2C2BRG         PIC32_R (0x5140)    /* Baud rate */
+#define I2C2BRGCLR      PIC32_R (0x5144)
+#define I2C2BRGSET      PIC32_R (0x5148)
+#define I2C2BRGINV      PIC32_R (0x514C)
+#define I2C2TRN         PIC32_R (0x5150)    /* Transmit */
+#define I2C2TRNCLR      PIC32_R (0x5154)
+#define I2C2TRNSET      PIC32_R (0x5158)
+#define I2C2TRNINV      PIC32_R (0x515C)
+#define I2C2RCV         PIC32_R (0x5160)    /* Receive */
+
+/*
+ * I2C Status register bits
+ */
+#define PIC32_I2CSTAT_TBF       0x0001  /* Transmit buffer full */
+#define PIC32_I2CSTAT_RBF       0x0002  /* Receive buffer full */
+#define PIC32_I2CSTAT_R_W       0x0004  /* Read/write (1=read) */
+#define PIC32_I2CSTAT_S         0x0008  /* Start condition */
+#define PIC32_I2CSTAT_P         0x0010  /* Stop condition */
+#define PIC32_I2CSTAT_D_A       0x0020  /* Data/address bit (1=data) */
+#define PIC32_I2CSTAT_I2COV     0x0040  /* Receive overflow */
+#define PIC32_I2CSTAT_IWCOL     0x0080  /* Write collision */
+#define PIC32_I2CSTAT_ADD10     0x0100  /* 10-bit address status */
+#define PIC32_I2CSTAT_GCSTAT    0x0200  /* General call address status */
+#define PIC32_I2CSTAT_BCL       0x0400  /* Master bus collision */
+#define PIC32_I2CSTAT_TRSTAT    0x4000  /* Transmit status bit */
+#define PIC32_I2CSTAT_ACKSTAT   0x8000  /* Acknowledge status bit (0=ACK) */
 
 /*--------------------------------------
  * Configuration registers.
