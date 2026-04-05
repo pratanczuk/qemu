@@ -2690,7 +2690,8 @@ static void pic32_init(MachineState *machine, int board_type)
         break;
     }
 
-    /* UARTs */
+    /* UARTs — PBCLK for BRG (CPU init uses 100 MHz; adjust if board PBDIV differs). */
+    s->pbclk_hz = 100000000ull;
     pic32_uart_init(s, 0, PIC32_IRQ_U1E, U1STA, U1MODE);
     pic32_uart_init(s, 1, PIC32_IRQ_U2E, U2STA, U2MODE);
     pic32_uart_init(s, 2, PIC32_IRQ_U3E, U3STA, U3MODE);

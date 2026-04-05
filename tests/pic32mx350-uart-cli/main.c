@@ -5,6 +5,7 @@
 #include <stdint.h>
 #include <string.h>
 #include <xc.h>
+#include <sys/attribs.h>
 #include <pic32m-libs/cp0defs.h>
 
 /* PBCLK = SYSCLK = 80 MHz (matches QEMU default DEVCFG / OSCCON model). */
@@ -33,8 +34,10 @@ static void uart_putc(unsigned u, char c)
         tx = &U3TXREG;
         break;
     }
-    /* Do not spin on UTXBF: under QEMU virtual time, tight TX waits can starve
-     * the main loop so RX FIFO is never drained (multi-byte host input stalls). */
+    /*
+     * Do not spin on UTXBF: in LPBACK (uart3 isr test) a tight wait can deadlock
+     * with QEMU's TX completion timer; the CLI prints status after restoring UART.
+     */
     *tx = (uint32_t)(unsigned char)c;
 }
 
@@ -115,6 +118,7 @@ static void print_help(unsigned u)
                  "  i2c all     - I2C1/2 TRN stub RCV+XOR + I2CxMIF (QEMU)\r\n"
                  "  nvm all     - NVM page erase + row + word on last flash page\r\n"
                  "                (QEMU mips_pic32mx3 NVM model; needs ~1 KiB scratch)\r\n"
+                 "  uart3 isr   - UART3 LPBACK + TX ring drained in ISR (grblHAL-style)\r\n"
                  "  echo X      - print X\r\n");
 }
 
@@ -845,6 +849,201 @@ static void nvm_all(unsigned u)
     uart_puts(u, "OK nvm all\r\n");
 }
 
+/* --- uart3 isr: grblHAL-style TX ring + U3TXIE; LPBACK; T4 polled 1 ms (keeps T3 for other cmds) --- */
+
+#define U3ISR_TX_QSIZE  32u
+#define U3ISR_TX_MASK   (U3ISR_TX_QSIZE - 1u)
+#define U3ISR_RX_CAP    8u
+
+static uint8_t u3isr_txdata[U3ISR_TX_QSIZE];
+static volatile uint16_t u3isr_txhead;
+static volatile uint16_t u3isr_txtail;
+static uint8_t u3isr_rxcap[U3ISR_RX_CAP];
+static volatile uint8_t u3isr_rxn;
+static volatile uint32_t u3isr_tx_writes;
+
+static const uint8_t u3isr_pat[] = { 0x55u, 0xAAu, 0x5Au, 0xA5u };
+
+void __ISR(_UART_3_VECTOR, IPL2AUTO) uart3_isr_grblhal_test(void)
+{
+    if (IFS1bits.U3RXIF) {
+        unsigned n;
+
+        /* Fixed iteration cap: host serial + LPBACK can refill RX; never spin forever. */
+        for (n = 0; n < 32u && U3STAbits.URXDA; n++) {
+            uint8_t d = (uint8_t)U3RXREG;
+            if (u3isr_rxn < U3ISR_RX_CAP) {
+                u3isr_rxcap[u3isr_rxn++] = d;
+            }
+        }
+        IFS1CLR = _IFS1_U3RXIF_MASK;
+    }
+
+    if (IFS2bits.U3TXIF && IEC2bits.U3TXIE) {
+        uint_fast16_t tail = u3isr_txtail;
+        if (tail != u3isr_txhead) {
+            U3TXREG = u3isr_txdata[tail];
+            u3isr_txtail = (uint16_t)((tail + 1u) & U3ISR_TX_MASK);
+            u3isr_tx_writes++;
+        }
+        if (u3isr_txtail == u3isr_txhead) {
+            IEC2CLR = _IEC2_U3TXIE_MASK;
+        }
+        IFS2CLR = _IFS2_U3TXIF_MASK;
+    }
+}
+
+/*
+ * Guest ~1 ms pacing for uart3 isr waits. T4IF polling can miss under QEMU when
+ * the UART ISR runs often; a bounded busy loop matches wall time well enough for
+ * the CLI timeout counters (silicon may run slightly faster).
+ */
+static void u3isr_poll_delay_1ms(void)
+{
+    volatile uint32_t k;
+
+    for (k = 0; k < 500u; k++) {
+        __asm__ __volatile__("" ::: "memory");
+    }
+}
+
+static int u3isr_enqueue(uint8_t c)
+{
+    volatile uint32_t guard = 0;
+    uint16_t next;
+
+    for (;;) {
+        uint16_t t = u3isr_txtail;
+        next = (uint16_t)((u3isr_txhead + 1u) & U3ISR_TX_MASK);
+        if (next != t) {
+            break;
+        }
+        if (++guard > 5000000u) {
+            return -1;
+        }
+    }
+    u3isr_txdata[u3isr_txhead] = c;
+    u3isr_txhead = next;
+    IEC2SET = _IEC2_U3TXIE_MASK;
+    return 0;
+}
+
+static void u3isr_hw_lpback_init(void)
+{
+    U3MODE = 0;
+    U3STA = 0;
+    U3STAbits.UTXEN = 1;
+    U3STAbits.URXEN = 1;
+    U3MODEbits.BRGH = 0;
+    U3BRG = (uint16_t)((PBCLK_HZ / (16u * UART_BAUD)) - 1u);
+    U3MODEbits.LPBACK = 1;
+    U3MODEbits.UEN = 0;
+    U3MODEbits.ON = 1;
+
+    IPC9bits.U3IP = 2;
+    IPC9bits.U3IS = 0;
+
+    /* Bound flush: under QEMU a host -serial backend may refill faster than we
+     * drain, which would spin forever here (not possible on bare silicon). */
+    {
+        unsigned nflush = 0;
+
+        while (U3STAbits.URXDA && nflush < 64u) {
+            (void)U3RXREG;
+            nflush++;
+        }
+    }
+
+    IFS1CLR = _IFS1_U3RXIF_MASK;
+    IFS2CLR = _IFS2_U3TXIF_MASK;
+    IEC1SET = _IEC1_U3RXIE_MASK;
+    IEC2CLR = _IEC2_U3TXIE_MASK;
+}
+
+/*
+ * XC32 -O2 miscompiles this routine (success path branches to function entry
+ * instead of restore / OK print). Keep this unit at -O0.
+ */
+static void __attribute__((noinline, optimize("O0"))) uart3_isr_lpback_cmd(unsigned u)
+{
+    unsigned i;
+    uint32_t elapsed;
+    const char *result = NULL;
+
+    uart_puts(u, "uart3 isr: LPBACK + TX ring (grblHAL-style)...\r\n");
+
+    u3isr_txhead = 0;
+    u3isr_txtail = 0;
+    u3isr_rxn = 0;
+    u3isr_tx_writes = 0;
+
+    __builtin_disable_interrupts();
+    IEC1CLR = _IEC1_U3RXIE_MASK;
+    IEC2CLR = _IEC2_U3TXIE_MASK;
+    IFS1CLR = _IFS1_U3RXIF_MASK;
+    IFS2CLR = _IFS2_U3TXIF_MASK;
+    U3MODEbits.ON = 0;
+
+    u3isr_hw_lpback_init();
+
+    __builtin_enable_interrupts();
+
+    for (i = 0; i < sizeof u3isr_pat; i++) {
+        if (u3isr_enqueue(u3isr_pat[i]) != 0) {
+            result = "ERR uart3 isr 1\r\n";
+            goto restore;
+        }
+    }
+
+    elapsed = 0;
+    while (u3isr_txtail != u3isr_txhead) {
+        if (elapsed >= 200u) {
+            result = "ERR uart3 isr 2\r\n";
+            goto restore;
+        }
+        u3isr_poll_delay_1ms();
+        elapsed++;
+    }
+
+    elapsed = 0;
+    while (u3isr_rxn < sizeof u3isr_pat) {
+        if (elapsed >= 200u) {
+            result = "ERR uart3 isr 3\r\n";
+            goto restore;
+        }
+        u3isr_poll_delay_1ms();
+        elapsed++;
+    }
+
+    for (i = 0; i < sizeof u3isr_pat; i++) {
+        if (u3isr_rxcap[i] != u3isr_pat[i]) {
+            result = "ERR uart3 isr 4\r\n";
+            goto restore;
+        }
+    }
+
+    if (u3isr_tx_writes < sizeof u3isr_pat) {
+        result = "ERR uart3 isr 5\r\n";
+        goto restore;
+    }
+
+    result = "OK uart3 isr\r\n";
+
+restore:
+    if (result == NULL) {
+        result = "ERR uart3 isr: internal\r\n";
+    }
+    __builtin_disable_interrupts();
+    IEC1CLR = _IEC1_U3RXIE_MASK;
+    IEC2CLR = _IEC2_U3TXIE_MASK;
+    IFS1CLR = _IFS1_U3RXIF_MASK;
+    IFS2CLR = _IFS2_U3TXIF_MASK;
+    U3MODEbits.ON = 0;
+    uart_hw_init(2);
+    uart_puts(u, result);
+    __builtin_enable_interrupts();
+}
+
 static void run_cmd(unsigned u, char *cmd)
 {
     while (*cmd == ' ' || *cmd == '\t') {
@@ -946,6 +1145,8 @@ static void run_cmd(unsigned u, char *cmd)
         i2c_all(u);
     } else if (strcmp(cmd, "nvm all") == 0) {
         nvm_all(u);
+    } else if (strcmp(cmd, "uart3 isr") == 0) {
+        uart3_isr_lpback_cmd(u);
     } else if (strncmp(cmd, "echo ", 5) == 0) {
         uart_puts(u, cmd + 5);
         uart_puts(u, "\r\nOK echo\r\n");

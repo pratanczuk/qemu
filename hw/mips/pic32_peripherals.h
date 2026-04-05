@@ -133,6 +133,12 @@ struct _pic32_t {
     uint32_t    boot_flash_bus_base;
     uint8_t     nvm_key_step;
 
+    /*
+     * Peripheral bus clock (Hz) for UART TX timing from UxBRG / UxMODE.
+     * Boards must set this before pic32_uart_init; if zero, UART code uses 80 MHz.
+     */
+    uint64_t    pbclk_hz;
+
     /* Optional host files: load before -kernel; save on QEMU exit (see pic32mx3_nvm.c). */
     char        *prog_flash_path;
     char        *boot_flash_path;

@@ -14,12 +14,18 @@ PART    := 32MX350F256H
 TARGET  := uart-cli-mx350.elf
 HEX     := uart-cli-mx350.hex
 
+# grblHAL-style UART3 ISR + TX ring + LPBACK (see PROPOSAL-grblhal-uart3-isr-test.md)
+UART3_ISR_ELF  := uart3-isr-mx350.elf
+UART3_ISR_HEX  := uart3-isr-mx350.hex
+
 CFLAGS  := -mprocessor=$(PART) -O2 -Wall -std=c99 -ffunction-sections
 LDFLAGS := -Wl,-Map=uart-cli-mx350.map
 
-.PHONY: all clean qemu
+.PHONY: all clean qemu uart3-isr
 
 all: $(HEX)
+
+uart3-isr: $(UART3_ISR_HEX)
 
 # Convenience: link qemu-system-mipsel from this tree (needed after hw/mips edits).
 qemu:
@@ -31,5 +37,12 @@ $(TARGET): main.c
 $(HEX): $(TARGET)
 	$(BIN2HEX) $<
 
+$(UART3_ISR_ELF): uart3_isr_lpback_main.c
+	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ uart3_isr_lpback_main.c
+
+$(UART3_ISR_HEX): $(UART3_ISR_ELF)
+	$(BIN2HEX) $<
+
 clean:
-	rm -f $(TARGET) $(HEX) uart-cli-mx350.map *.o
+	rm -f $(TARGET) $(HEX) uart-cli-mx350.map *.o \
+		$(UART3_ISR_ELF) $(UART3_ISR_HEX)

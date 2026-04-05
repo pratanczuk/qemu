@@ -33,6 +33,49 @@
 #define UART_IRQ_RX     1               // receiver irq offset
 #define UART_IRQ_TX     2               // transmitter irq offset
 
+/* UxBRG is 0x40 bytes after UxMODE on MX/MZ headers used by this model. */
+#define PIC32_UART_BRG_OFF 0x40
+
+/*
+ * Match mips_pic32mx3 T1–T5: under -icount use VIRTUAL_RT so ISR-driven TX
+ * still sees timer expiry without guest code that advances VIRTUAL time.
+ */
+static inline QEMUClockType pic32_uart_xmit_clock_type(void)
+{
+    return use_icount ? QEMU_CLOCK_VIRTUAL_RT : QEMU_CLOCK_VIRTUAL;
+}
+
+static uint64_t pic32_uart_tx_byte_delay_ns(pic32_t *s, uart_t *u)
+{
+    uint32_t mode = VALUE(u->mode);
+    uint32_t brg = VALUE((u->mode + PIC32_UART_BRG_OFF)) & 0xffffu;
+    uint64_t pbclk = s->pbclk_hz ? s->pbclk_hz : 80000000ull;
+    unsigned divisor = (mode & PIC32_UMODE_BRGH) ? 4u : 16u;
+    uint64_t ticks_per_bit = (uint64_t)(brg + 1u) * divisor;
+    uint64_t bit_ns;
+    unsigned pd = mode & PIC32_UMODE_PDSEL;
+    int frame_bits = 10;
+
+    if (ticks_per_bit == 0) {
+        return get_ticks_per_sec() / 5000;
+    }
+    bit_ns = (ticks_per_bit * 1000000000ull) / pbclk;
+    if (pd != PIC32_UMODE_PDSEL_8NPAR) {
+        frame_bits = 11;
+    }
+    if (mode & PIC32_UMODE_STSEL) {
+        frame_bits += 1;
+    }
+    {
+        uint64_t char_ns = bit_ns * (unsigned)frame_bits;
+
+        if (char_ns < 1000ull) {
+            char_ns = 1000ull;
+        }
+        return char_ns;
+    }
+}
+
 /*
  * Read of UxRXREG register.
  */
@@ -58,28 +101,55 @@ unsigned pic32_uart_get_char(pic32_t *s, int unit)
     return value;
 }
 
+/* LPBACK: TX output is fed into the RX path; host char backend still sees the byte. */
+static void pic32_uart_loopback_rx_byte(pic32_t *s, uart_t *u, unsigned char byte)
+{
+    if (!(VALUE(u->mode) & PIC32_UMODE_ON) ||
+        !(VALUE(u->sta) & PIC32_USTA_URXEN)) {
+        return;
+    }
+    if (u->rx_len >= PIC32_UART_RX_FIFO) {
+        return;
+    }
+    u->rx_fifo[(u->rx_rd + u->rx_len) % PIC32_UART_RX_FIFO] = byte;
+    u->rx_len++;
+    VALUE(u->sta) |= PIC32_USTA_URXDA;
+    s->irq_raise(s, u->irq + UART_IRQ_RX);
+}
+
 /*
  * Write to UxTXREG register.
  */
 void pic32_uart_put_char(pic32_t *s, int unit, unsigned char byte)
 {
     uart_t *u = &s->uart[unit];
+    int lpback = (VALUE(u->mode) & PIC32_UMODE_ON) &&
+                 (VALUE(u->mode) & PIC32_UMODE_LPBACK);
 
     if (getenv("QEMU_PIC32_TRACE_UART")) {
         fprintf(stderr, "pic32 uart%u TX 0x%02x\n", unit, byte);
     }
 
-    if (! u->chr) {
+    if (!u->chr && !lpback) {
         printf("--- %s(unit = %u) serial port not configured\n",
             __func__, unit);
         return;
     }
 
-    /* Send the byte. */
-    if (qemu_chr_fe_write(u->chr, &byte, 1) != 1) {
-        //TODO: suspend simulation until serial port ready
-        printf("--- %s(unit = %u) failed\n", __func__, unit);
-        return;
+    if (lpback) {
+        pic32_uart_loopback_rx_byte(s, u, byte);
+    }
+    /*
+     * LPBACK is on-chip only: do not mirror TX to the host char device. Sending
+     * to stdio while the guest ISR drains loopback RX can let host echo/refill
+     * the RX FIFO during while(URXDA) and wedge the guest forever.
+     */
+    if (u->chr && !lpback) {
+        if (qemu_chr_fe_write(u->chr, &byte, 1) != 1) {
+            /* TODO: suspend simulation until serial port ready */
+            printf("--- %s(unit = %u) failed\n", __func__, unit);
+            return;
+        }
     }
 
     if ((VALUE(u->mode) & PIC32_UMODE_ON) &&
@@ -88,9 +158,10 @@ void pic32_uart_put_char(pic32_t *s, int unit, unsigned char byte)
         VALUE(u->sta) |= PIC32_USTA_UTXBF;
         VALUE(u->sta) &= ~PIC32_USTA_TRMT;
 
-        /* Generate TX interrupt with some delay. */
-        timer_mod(u->transmit_timer, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) +
-            get_ticks_per_sec() / 5000);
+        /* TX IF after ~one character time from UxBRG / BRGH / frame format. */
+        timer_mod(u->transmit_timer,
+                  qemu_clock_get_ns(pic32_uart_xmit_clock_type()) +
+                  pic32_uart_tx_byte_delay_ns(s, u));
         u->oactive = 1;
     }
 }
@@ -253,7 +324,8 @@ void pic32_uart_init(pic32_t *s, int unit, int irq, int sta, int mode)
     u->mode = mode;
     u->rx_rd = 0;
     u->rx_len = 0;
-    u->transmit_timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, uart_timeout, u);
+    u->transmit_timer = timer_new_ns(pic32_uart_xmit_clock_type(),
+                                       uart_timeout, u);
 
     if (unit >= MAX_SERIAL_PORTS) {
         /* Cannot instantiate so many serial ports. */

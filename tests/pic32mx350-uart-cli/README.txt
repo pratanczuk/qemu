@@ -8,6 +8,22 @@ Build (XC32 v4.60 under /opt/microchip/xc32/v4.60):
 
 Outputs: uart-cli-mx350.elf, uart-cli-mx350.hex
 
+grblHAL-style UART3 (ISR TX ring)
+--------------------------------
+Firmware that matches third-party **grblHAL** `serial.c` (TX queue + `U3TXIE`, bytes to
+`U3TXREG` only in ISR) is **not** covered by the polling `uart_putc` in main.c.
+
+- **Proposal / rationale:** `PROPOSAL-grblhal-uart3-isr-test.md`
+- **Guest:** `uart3_isr_lpback_main.c` → `make uart3-isr-mx350.hex`
+- **QEMU check:** `./run-uart3-isr-lpback.expect [qemu-system-mipsel] [uart3-isr-mx350.hex]`
+
+That image uses **UART3 LPBACK** internally and prints **OK uart3_isr_lpback** on **UART1**
+(stdio with `-serial null -serial stdio -serial null`).
+
+The same test is also available inside **`uart-cli-mx350.hex`** as the interactive command
+**`uart3 isr`** (type at any `U1>` / `U2>` / `U3>` prompt). On success it prints **OK uart3 isr**;
+on failure **ERR uart3 isr N** (N = 1..5, same meaning as the standalone guest).
+
 Rebuilding QEMU when needed
 -----------------------------
 Any time you pull or change PIC32MX3 (or shared PIC32) *hardware models* under

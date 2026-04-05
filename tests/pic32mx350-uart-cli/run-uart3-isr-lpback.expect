@@ -1,0 +1,43 @@
+#!/usr/bin/expect -f
+# UART3 ISR + software TX ring + LPBACK (grblHAL-style); result on UART1 / stdio.
+# Build: make uart3-isr-mx350.hex
+# See PROPOSAL-grblhal-uart3-isr-test.md
+#
+# argv0 = qemu-system-mipsel, argv1 = uart3-isr-mx350.hex
+set send_slow {1 0.012}
+set timeout 60
+set qemu [lindex $argv 0]
+set hex [lindex $argv 1]
+if {$qemu eq ""} {
+    set qemu "/data/projects/qemu/build-pic32-qemu/qemu-system-mipsel"
+}
+if {$hex eq ""} {
+    set hex "/data/projects/qemu/tests/pic32mx350-uart-cli/uart3-isr-mx350.hex"
+}
+
+if {![info exists env(NO_ICOUNT)]} {
+    set env(NO_ICOUNT) 1
+}
+if {$env(NO_ICOUNT) ne ""} {
+    set icount_args {}
+} elseif {[info exists env(ICOUNT_SHIFT)] && $env(ICOUNT_SHIFT) ne ""} {
+    set icount_args [list -icount "shift=$env(ICOUNT_SHIFT)"]
+} else {
+    set icount_args {-icount shift=auto}
+}
+
+spawn -noecho $qemu {*}$icount_args -M pic32mx3-generic -nographic -monitor none \
+    -serial null -serial stdio -serial null -kernel $hex
+
+expect {
+    -re {OK uart3_isr_lpback} {}
+    -re {ERR uart3_isr_lpback} {
+        puts stderr "run-uart3-isr-lpback.expect: guest reported failure (UART3 TX ISR / LPBACK — see PROPOSAL-grblhal-uart3-isr-test.md)"
+        exit 1
+    }
+    timeout { puts stderr "timeout: OK uart3_isr_lpback (UART3 TX ISR / LPBACK)"; exit 1 }
+}
+
+catch {close -i $spawn_id}
+catch {wait -i $spawn_id}
+puts stderr "run-uart3-isr-lpback.expect: ok"
