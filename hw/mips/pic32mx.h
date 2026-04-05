@@ -79,6 +79,21 @@
 #define U2BRGCLR        PIC32_R (0x6244)
 #define U2BRGSET        PIC32_R (0x6248)
 #define U2BRGINV        PIC32_R (0x624C)
+
+#define U3MODE          PIC32_R (0x6400) /* Mode */
+#define U3MODECLR       PIC32_R (0x6404)
+#define U3MODESET       PIC32_R (0x6408)
+#define U3MODEINV       PIC32_R (0x640C)
+#define U3STA           PIC32_R (0x6410) /* Status and control */
+#define U3STACLR        PIC32_R (0x6414)
+#define U3STASET        PIC32_R (0x6418)
+#define U3STAINV        PIC32_R (0x641C)
+#define U3TXREG         PIC32_R (0x6420) /* Transmit */
+#define U3RXREG         PIC32_R (0x6430) /* Receive */
+#define U3BRG           PIC32_R (0x6440) /* Baud rate */
+#define U3BRGCLR        PIC32_R (0x6444)
+#define U3BRGSET        PIC32_R (0x6448)
+#define U3BRGINV        PIC32_R (0x644C)
 #endif
 #ifdef PIC32MX7
 #define U4MODE          PIC32_R (0x6200) /* Mode */
@@ -821,6 +836,18 @@
 #define DDPCON          PIC32_R (0xf200)        /* Debug Data Port Control */
 #define DEVID           PIC32_R (0xf220)
 #define SYSKEY          PIC32_R (0xf230)
+#define REFOCON         PIC32_R (0xf240)        /* Reference clock output */
+#define REFOCONCLR      PIC32_R (0xf244)
+#define REFOCONSET      PIC32_R (0xf248)
+#define REFOCONINV      PIC32_R (0xf24c)
+#define REFOTRIM        PIC32_R (0xf250)
+#define REFOTRIMCLR     PIC32_R (0xf254)
+#define REFOTRIMSET     PIC32_R (0xf258)
+#define REFOTRIMINV     PIC32_R (0xf25c)
+#define CFGCON          PIC32_R (0xf260)        /* Configuration control */
+#define CFGCONCLR       PIC32_R (0xf264)
+#define CFGCONSET       PIC32_R (0xf268)
+#define CFGCONINV       PIC32_R (0xf26c)
 #define RCON            PIC32_R (0xf600)
 #define RCONCLR         PIC32_R (0xf604)
 #define RCONSET         PIC32_R (0xf608)
@@ -930,16 +957,36 @@
 #define WDTCONINV       PIC32_R (0x000C)
 
 /*
- * Comparator voltage reference register
+ * Comparator voltage reference + comparators (offsets from 0xBF800000).
+ * PIC32MX350F256H matches XC32 p32mx350f256h.h; other MX3 headers may differ.
  */
+#ifdef PIC32MX3
+#define CVRCON          PIC32_R (0x9800)    /* Comparator voltage reference */
+#define CVRCONCLR       PIC32_R (0x9804)
+#define CVRCONSET       PIC32_R (0x9808)
+#define CVRCONINV       PIC32_R (0x980C)
+#define CM1CON          PIC32_R (0xA000)    /* Comparator 1 control */
+#define CM1CONCLR       PIC32_R (0xA004)
+#define CM1CONSET       PIC32_R (0xA008)
+#define CM1CONINV       PIC32_R (0xA00C)
+#define CM2CON          PIC32_R (0xA010)    /* Comparator 2 control */
+#define CM2CONCLR       PIC32_R (0xA014)
+#define CM2CONSET       PIC32_R (0xA018)
+#define CM2CONINV       PIC32_R (0xA01C)
+#define CMSTAT          PIC32_R (0xA060)    /* Comparator status */
+#define CMSTATCLR       PIC32_R (0xA064)
+#define CMSTATSET       PIC32_R (0xA068)
+#define CMSTATINV       PIC32_R (0xA06C)
+/* CM3 not present on MX350; keep legacy map for QEMU storage if accessed. */
+#define CM3CON          PIC32_R (0x0240)
+#define CM3CONCLR       PIC32_R (0x0244)
+#define CM3CONSET       PIC32_R (0x0248)
+#define CM3CONINV       PIC32_R (0x024C)
+#else
 #define CVRCON          PIC32_R (0x0140)    /* Comparator voltage reference control */
 #define CVRCONCLR       PIC32_R (0x0144)
 #define CVRCONSET       PIC32_R (0x0148)
 #define CVRCONINV       PIC32_R (0x014C)
-
-/*
- * Comparator registers (CM1/CM2/CM3)
- */
 #define CM1CON          PIC32_R (0x01C0)    /* Comparator 1 control */
 #define CM1CONCLR       PIC32_R (0x01C4)
 #define CM1CONSET       PIC32_R (0x01C8)
@@ -956,6 +1003,7 @@
 #define CMSTATCLR       PIC32_R (0x0284)
 #define CMSTATSET       PIC32_R (0x0288)
 #define CMSTATINV       PIC32_R (0x028C)
+#endif
 
 /*
  * Real-Time Clock and Calendar (RTCC) registers
@@ -1463,7 +1511,7 @@
 #define PIC32_IRQ_IC2       9   /* Input Capture 2 */
 #define PIC32_IRQ_OC2       10  /* Output Compare 2 */
 #define PIC32_IRQ_INT2      11  /* External Interrupt 2 */
-#define PIC32_IRQ_T3        12  /* Timer3 */
+#define PIC32_IRQ_T3        14  /* Timer3 — IFS0 T3IF (bit 14), not vector 12 */
 #define PIC32_IRQ_IC3       13  /* Input Capture 3 */
 #define PIC32_IRQ_OC3       14  /* Output Compare 3 */
 #define PIC32_IRQ_INT3      15  /* External Interrupt 3 */

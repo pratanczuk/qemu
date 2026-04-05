@@ -21,8 +21,12 @@
  * arising out of or in connection with the use or performance of
  * this software.
  */
+#include <stdint.h>
 #include "hw/sysbus.h"                  /* SysBusDevice */
 #include "net/net.h"
+#include "qemu/notify.h"
+
+struct CharDriverState;
 
 #define IO_MEM_SIZE     (1024*1024)     /* 1 Mbyte */
 
@@ -31,6 +35,16 @@ typedef struct _spi_t spi_t;
 typedef struct _sdcard_t sdcard_t;
 typedef struct _pic32_t pic32_t;
 typedef struct _eth_t eth_t;
+
+/* PIC32MX350F256H: T1–T5 period match (pic32mx3-generic). */
+#define PIC32_MX3_N_TMRS 5
+
+typedef struct Pic32Mx3TmrOpaque {
+    pic32_t *mcu;
+    int idx;
+} Pic32Mx3TmrOpaque;
+
+#define PIC32_UART_RX_FIFO  32
 
 /*
  * UART private data.
@@ -41,7 +55,9 @@ struct _uart_t {
     int         oactive;                /* output active */
     unsigned    sta;                    /* UxSTA address */
     unsigned    mode;                   /* UxMODE address */
-    unsigned    rxbyte;                 /* received byte */
+    uint8_t     rx_fifo[PIC32_UART_RX_FIFO];
+    unsigned    rx_rd;                  /* read index */
+    unsigned    rx_len;                 /* bytes in fifo */
     CharDriverState *chr;               /* pointer to serial_hds[i] */
     QEMUTimer   *transmit_timer;        /* needed to delay TX interrupt */
 };
@@ -102,8 +118,25 @@ struct _pic32_t {
     DeviceState *eth_dev;               /* Ethernet device */
     eth_t       *eth;                   /* Ethernet driver data */
 
+    QEMUTimer       *tmr_timer[PIC32_MX3_N_TMRS];
+    Pic32Mx3TmrOpaque tmr_opaque[PIC32_MX3_N_TMRS];
+
     void (*irq_raise)(pic32_t *s, int irq); /* set interrupt request */
     void (*irq_clear)(pic32_t *s, int irq); /* clear interrupt request */
+
+    /* PIC32MX3 flash backing for NVM programming (see pic32mx3_nvm.c). */
+    uint8_t     *prog_flash_host;
+    uint8_t     *boot_flash_host;
+    uint32_t    prog_flash_size;
+    uint32_t    boot_flash_size;
+    uint32_t    prog_flash_bus_base;
+    uint32_t    boot_flash_bus_base;
+    uint8_t     nvm_key_step;
+
+    /* Optional host files: load before -kernel; save on QEMU exit (see pic32mx3_nvm.c). */
+    char        *prog_flash_path;
+    char        *boot_flash_path;
+    Notifier    flash_exit_notifier;
 };
 
 /*
@@ -115,11 +148,14 @@ void pic32_gpio_write(pic32_t *s, int unit, unsigned val);
  * UART routines.
  */
 void pic32_uart_init(pic32_t *s, int unit, int irq, int sta, int mode);
+void pic32_uart_attach_chr(pic32_t *s, int unit, struct CharDriverState *chr);
 unsigned pic32_uart_get_char(pic32_t *s, int unit);
 void pic32_uart_put_char(pic32_t *s, int unit, unsigned char data);
 void pic32_uart_poll_status(pic32_t *s, int unit);
 void pic32_uart_update_mode(pic32_t *s, int unit);
 void pic32_uart_update_status(pic32_t *s, int unit);
+void pic32_uart_on_tx_ie_enabled(pic32_t *s, int unit, uint32_t prev_iec,
+                                 uint32_t new_iec);
 
 /*
  * SPI routines.

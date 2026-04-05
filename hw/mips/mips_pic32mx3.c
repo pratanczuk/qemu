@@ -29,16 +29,21 @@
 #include "hw/i386/pc.h"
 #include "hw/char/serial.h"
 #include "hw/mips/cpudevs.h"
+#include "hw/qdev-properties.h"
 #include "sysemu/char.h"
 #include "hw/loader.h"
 #include "qemu/error-report.h"
+#include "sysemu/sysemu.h"
 #include "hw/empty_slot.h"
 #include "elf.h"
+#include "qemu/timer.h"
+#include <stdlib.h>
 #include <termios.h>
 
 #define PIC32MX3
 #include "pic32mx.h"
 #include "pic32_peripherals.h"
+#include "pic32mx3_nvm.h"
 
 /* Hardware addresses */
 #define PROGRAM_FLASH_START 0x1d000000
@@ -74,77 +79,94 @@ static char *boot_ptr;
 
 /*
  * TODO: add option to enable tracing.
+ * IRQ: set QEMU_PIC32_TRACE_IRQ=1 to log each irq_raise() to stderr.
  */
 #define TRACE   0
 
 /*
- * PIC32MX3 specific table:
- * translate IRQ number to interrupt vector.
+ * PIC32MX350F256H: irq index is the IFS bit position (IFS0: 0–31, IFS1: 32–63,
+ * IFS2: 64–95). irq_raise() ORs 1 << irq into the corresponding IFS register.
  */
 static const int irq_to_vector[] = {
-    PIC32_VECT_CT,      /* 0  - Core Timer Interrupt */
-    PIC32_VECT_CS0,     /* 1  - Core Software Interrupt 0 */
-    PIC32_VECT_CS1,     /* 2  - Core Software Interrupt 1 */
-    PIC32_VECT_INT0,    /* 3  - External Interrupt 0 */
-    PIC32_VECT_T1,      /* 4  - Timer1 */
-    PIC32_VECT_IC1,     /* 5  - Input Capture 1 */
-    PIC32_VECT_OC1,     /* 6  - Output Compare 1 */
-    PIC32_VECT_INT1,    /* 7  - External Interrupt 1 */
-    PIC32_VECT_T2,      /* 8  - Timer2 */
-    PIC32_VECT_IC2,     /* 9  - Input Capture 2 */
-    PIC32_VECT_OC2,     /* 10 - Output Compare 2 */
-    PIC32_VECT_INT2,    /* 11 - External Interrupt 2 */
-    PIC32_VECT_T3,      /* 12 - Timer3 */
-    PIC32_VECT_IC3,     /* 13 - Input Capture 3 */
-    PIC32_VECT_OC3,     /* 14 - Output Compare 3 */
-    PIC32_VECT_INT3,    /* 15 - External Interrupt 3 */
-    PIC32_VECT_T4,      /* 16 - Timer4 */
-    PIC32_VECT_IC4,     /* 17 - Input Capture 4 */
-    PIC32_VECT_OC4,     /* 18 - Output Compare 4 */
-    PIC32_VECT_INT4,    /* 19 - External Interrupt 4 */
-    PIC32_VECT_T5,      /* 20 - Timer5 */
-    PIC32_VECT_IC5,     /* 21 - Input Capture 5 */
-    PIC32_VECT_OC5,     /* 22 - Output Compare 5 */
-    PIC32_VECT_SPI1,    /* 23 - SPI1 Fault */
-    PIC32_VECT_SPI1,    /* 24 - SPI1 Transfer Done */
-    PIC32_VECT_SPI1,    /* 25 - SPI1 Receive Done */
-
-    PIC32_VECT_U1,      /* 26 - UART1 Error (shared SPI3/I2C3 slot; MX3 uses U1) */
-    PIC32_VECT_U1,      /* 27 - UART1 Receiver */
-    PIC32_VECT_U1,      /* 28 - UART1 Transmitter */
-
-    PIC32_VECT_I2C1,    /* 29 - I2C1 Bus Collision Event */
-    PIC32_VECT_I2C1,    /* 30 - I2C1 Slave Event */
-    PIC32_VECT_I2C1,    /* 31 - I2C1 Master Event */
-    PIC32_VECT_CN,      /* 32 - Input Change Interrupt */
-    PIC32_VECT_AD1,     /* 33 - ADC1 Convert Done */
-    PIC32_VECT_PMP,     /* 34 - Parallel Master Port */
-    PIC32_VECT_CMP1,    /* 35 - Comparator Interrupt */
-    PIC32_VECT_CMP2,    /* 36 - Comparator Interrupt */
-
-    PIC32_VECT_SPI2,    /* 37 - SPI2 Fault (shared U3/I2C4 slot; MX3 uses SPI2) */
-    PIC32_VECT_SPI2,    /* 38 - SPI2 Transfer Done */
-    PIC32_VECT_SPI2,    /* 39 - SPI2 Receive Done */
-
-    PIC32_VECT_U2,      /* 40 - UART2 Error (shared SPI4/I2C5 slot; MX3 uses U2) */
-    PIC32_VECT_U2,      /* 41 - UART2 Receiver */
-    PIC32_VECT_U2,      /* 42 - UART2 Transmitter */
-
-    PIC32_VECT_I2C2,    /* 43 - I2C2 Bus Collision Event */
-    PIC32_VECT_I2C2,    /* 44 - I2C2 Slave Event */
-    PIC32_VECT_I2C2,    /* 45 - I2C2 Master Event */
-    PIC32_VECT_FSCM,    /* 46 - Fail-Safe Clock Monitor */
-    PIC32_VECT_RTCC,    /* 47 - Real-Time Clock and Calendar */
-    PIC32_VECT_DMA0,    /* 48 - DMA Channel 0 */
-    PIC32_VECT_DMA1,    /* 49 - DMA Channel 1 */
-    PIC32_VECT_DMA2,    /* 50 - DMA Channel 2 */
-    PIC32_VECT_DMA3,    /* 51 - DMA Channel 3 */
-    -1,                 /* 52 - DMA4 - not present on MX3xx */
-    -1,                 /* 53 - DMA5 - not present on MX3xx */
-    -1,                 /* 54 - DMA6 - not present on MX3xx */
-    -1,                 /* 55 - DMA7 - not present on MX3xx */
-    PIC32_VECT_FCE,     /* 56 - Flash Control Event */
-    PIC32_VECT_USB,     /* 57 - USB */
+    /* IFS0 */
+    PIC32_VECT_CT,      /* 0 */
+    PIC32_VECT_CS0,     /* 1 */
+    PIC32_VECT_CS1,     /* 2 */
+    PIC32_VECT_INT0,    /* 3 */
+    PIC32_VECT_T1,      /* 4 */
+    PIC32_VECT_IC1,     /* 5 IC1EIF */
+    PIC32_VECT_IC1,     /* 6 IC1IF */
+    PIC32_VECT_OC1,     /* 7 */
+    PIC32_VECT_INT1,    /* 8 */
+    PIC32_VECT_T2,      /* 9 */
+    PIC32_VECT_IC2,     /* 10 IC2EIF */
+    PIC32_VECT_IC2,     /* 11 IC2IF */
+    PIC32_VECT_OC2,     /* 12 */
+    PIC32_VECT_INT2,    /* 13 */
+    PIC32_VECT_T3,      /* 14 T3IF */
+    PIC32_VECT_IC3,     /* 15 IC3EIF */
+    PIC32_VECT_IC3,     /* 16 IC3IF */
+    PIC32_VECT_OC3,     /* 17 */
+    PIC32_VECT_INT3,    /* 18 */
+    PIC32_VECT_T4,      /* 19 */
+    PIC32_VECT_IC4,     /* 20 IC4EIF */
+    PIC32_VECT_IC4,     /* 21 IC4IF */
+    PIC32_VECT_OC4,     /* 22 */
+    PIC32_VECT_INT4,    /* 23 */
+    PIC32_VECT_T5,      /* 24 */
+    PIC32_VECT_IC5,     /* 25 IC5EIF */
+    PIC32_VECT_IC5,     /* 26 IC5IF */
+    PIC32_VECT_OC5,     /* 27 */
+    PIC32_VECT_AD1,     /* 28 */
+    PIC32_VECT_FSCM,    /* 29 */
+    PIC32_VECT_RTCC,    /* 30 */
+    PIC32_VECT_FCE,     /* 31 */
+    /* IFS1 */
+    PIC32_VECT_CMP1,    /* 32 */
+    PIC32_VECT_CMP2,    /* 33 */
+    -1,                 /* 34 reserved */
+    PIC32_VECT_SPI1,    /* 35 SPI1EIF */
+    PIC32_VECT_SPI1,    /* 36 SPI1RXIF */
+    PIC32_VECT_SPI1,    /* 37 SPI1TXIF */
+    PIC32_VECT_U1,      /* 38 U1EIF */
+    PIC32_VECT_U1,      /* 39 U1RXIF */
+    PIC32_VECT_U1,      /* 40 U1TXIF */
+    PIC32_VECT_I2C1,    /* 41 I2C1BIF */
+    PIC32_VECT_I2C1,    /* 42 I2C1SIF */
+    PIC32_VECT_I2C1,    /* 43 I2C1MIF */
+    PIC32_VECT_CN,      /* 44 CNAIF */
+    PIC32_VECT_CN,      /* 45 CNBIF */
+    PIC32_VECT_CN,      /* 46 CNCIF */
+    PIC32_VECT_CN,      /* 47 CNDIF */
+    PIC32_VECT_CN,      /* 48 CNEIF */
+    PIC32_VECT_CN,      /* 49 CNFIF */
+    PIC32_VECT_CN,      /* 50 CNGIF */
+    PIC32_VECT_PMP,     /* 51 PMPIF */
+    PIC32_VECT_PMP,     /* 52 PMPEIF */
+    PIC32_VECT_SPI2,    /* 53 SPI2EIF */
+    PIC32_VECT_SPI2,    /* 54 SPI2RXIF */
+    PIC32_VECT_SPI2,    /* 55 SPI2TXIF */
+    PIC32_VECT_U2,      /* 56 U2EIF */
+    PIC32_VECT_U2,      /* 57 U2RXIF */
+    PIC32_VECT_U2,      /* 58 U2TXIF */
+    PIC32_VECT_I2C2,    /* 59 I2C2BIF */
+    PIC32_VECT_I2C2,    /* 60 I2C2SIF */
+    PIC32_VECT_I2C2,    /* 61 I2C2MIF */
+    PIC32_VECT_U3,      /* 62 U3EIF */
+    PIC32_VECT_U3,      /* 63 U3RXIF */
+    /* IFS2 (MX350 subset) */
+    PIC32_VECT_U3,      /* 64 U3TXIF */
+    PIC32_VECT_U4,      /* 65 U4EIF */
+    PIC32_VECT_U4,      /* 66 U4RXIF */
+    PIC32_VECT_U4,      /* 67 U4TXIF */
+    -1,                 /* 68 */
+    -1,                 /* 69 */
+    -1,                 /* 70 */
+    -1,                 /* 71 CTMUIF (no vect in pic32mx.h) */
+    PIC32_VECT_DMA0,    /* 72 DMA0IF */
+    PIC32_VECT_DMA1,    /* 73 DMA1IF */
+    PIC32_VECT_DMA2,    /* 74 DMA2IF */
+    PIC32_VECT_DMA3,    /* 75 DMA3IF */
 };
 
 static void update_irq_status(pic32_t *s)
@@ -173,8 +195,14 @@ static void update_irq_status(pic32_t *s)
                 if (v < 0)
                     continue;
 
-                int level = VALUE(IPC(v >> 2));
-                level >>= 2 + (v & 3) * 8;
+                /*
+                 * Priority/subpriority live in IPC(irq/4), field (irq mod 4).
+                 * Do not use IPC(vector/4): e.g. UART3 IRQs 37–39 use IPC9 while
+                 * vector 31 would incorrectly use IPC7 (RIPL stays 0, VEIC never
+                 * delivers).
+                 */
+                int level = VALUE(IPC(irq >> 2));
+                level >>= 2 + (irq & 3) * 8;
                 level &= 7;
                 if (level > cause_ripl) {
                     vector = v;
@@ -183,10 +211,10 @@ static void update_irq_status(pic32_t *s)
             }
         }
         VALUE(INTSTAT) = vector | (cause_ripl << 8);
+        env->eic_vector = vector & 0xff;
+    } else {
+        env->eic_vector = 0;
     }
-
-    if (cause_ripl == current_ripl)
-        return;
 
     if (TRACE)
         fprintf(qemu_logfile, "--- Priority level Cause.RIPL = %u\n",
@@ -197,7 +225,49 @@ static void update_irq_status(pic32_t *s)
      */
     env->CP0_Cause &= ~(0x3f << (CP0Ca_IP + 2));
     env->CP0_Cause |= cause_ripl << (CP0Ca_IP + 2);
-    cpu_interrupt(CPU(s->cpu), CPU_INTERRUPT_HARD);
+    /*
+     * Always poke the CPU when any enabled interrupt is pending. Omitting
+     * cpu_interrupt when Cause.RIPL was unchanged left guest tight loops
+     * (e.g. a firmware busy-wait delay_ms) spinning in one TB while the T3 tick ISR
+     * never ran.
+     */
+    if ((VALUE(IFS0) & VALUE(IEC0)) ||
+        (VALUE(IFS1) & VALUE(IEC1)) ||
+        (VALUE(IFS2) & VALUE(IEC2))) {
+        cpu_interrupt(CPU(s->cpu), CPU_INTERRUPT_HARD);
+    } else if (cause_ripl != current_ripl) {
+        cpu_interrupt(CPU(s->cpu), CPU_INTERRUPT_HARD);
+    }
+}
+
+/*
+ * Decode IFS bit index for debug (set QEMU_PIC32_TRACE_IRQ=1).
+ */
+static const char *pic32mx3_irq_name(int irq)
+{
+    switch (irq) {
+    case 0: return "CT";
+    case 4: return "T1IF";
+    case 6: return "IC1IF";
+    case 7: return "OC1IF";
+    case 9: return "T2IF";
+    case 12: return "OC2IF";
+    case 17: return "OC3IF";
+    case 22: return "OC4IF";
+    case 14: return "T3IF";
+    case 19: return "T4IF";
+    case 24: return "T5IF";
+    case 28: return "U1TXIF";
+    case 32: return "CNIF";
+    case 33: return "AD1IF";
+    case 43: return "I2C2MIF";
+    case 51: return "PMPIF";
+    case 56: return "U2TXIF";
+    case 62: return "U3EIF";
+    case 63: return "U3RXIF";
+    case 64: return "U3TXIF";
+    default: return "?";
+    }
 }
 
 /*
@@ -205,10 +275,20 @@ static void update_irq_status(pic32_t *s)
  */
 static void irq_raise(pic32_t *s, int irq)
 {
-    if (VALUE(IFS(irq >> 5)) & (1 << (irq & 31)))
-        return;
+    if (getenv("QEMU_PIC32_TRACE_IRQ")) {
+        CPUMIPSState *env = &s->cpu->env;
+        int m = irq >> 5;
+        int b = irq & 31;
+        uint32_t iec = m == 0 ? VALUE(IEC0) : (m == 1 ? VALUE(IEC1) : VALUE(IEC2));
 
-    VALUE(IFS(irq >> 5)) |= 1 << (irq & 31);
+        fprintf(stderr,
+                "pic32mx3 irq_raise %s(%d) PC=0x%08x IFS&IEC[%d]=%d "
+                "IFS0=%08x IFS1=%08x IFS2=%08x IEC0=%08x IEC1=%08x IEC2=%08x\n",
+                pic32mx3_irq_name(irq), irq, (unsigned)env->active_tc.PC, irq,
+                (int)((iec >> b) & 1u), VALUE(IFS0), VALUE(IFS1), VALUE(IFS2),
+                VALUE(IEC0), VALUE(IEC1), VALUE(IEC2));
+    }
+    VALUE(IFS(irq >> 5)) |= 1u << (irq & 31);
     update_irq_status(s);
 }
 
@@ -256,6 +336,192 @@ static void pic32_soft_irq(CPUMIPSState *env, int num)
     irq_raise(s, num + 1);
 }
 
+/* PBCLK for PIC32MX350 generic board (matches DEVCFG / cpu_mips_clock_init). */
+#define PIC32MX3_PBCLK_HZ 80000000ull
+
+/*
+ * T1–T5 period match uses the same PBCLK-derived nanosecond period.
+ * With -icount, use VIRTUAL_RT so polled TxIF sees wall-time progress (see T3).
+ */
+static inline QEMUClockType pic32mx3_tmr3_clock_type(void)
+{
+    return use_icount ? QEMU_CLOCK_VIRTUAL_RT : QEMU_CLOCK_VIRTUAL;
+}
+
+static inline int64_t pic32mx3_tmr3_clock_get_ns(void)
+{
+    return qemu_clock_get_ns(pic32mx3_tmr3_clock_type());
+}
+
+/* IFS bit indices for T1IF..T5IF on PIC32MX350 (matches irq_to_vector[]). */
+static const uint8_t pic32mx3_tmr_ifs_irq[PIC32_MX3_N_TMRS] = { 4, 9, 14, 19, 24 };
+
+static uint64_t pic32mx3_typeb_period_ns(uint32_t tcon, uint32_t pr)
+{
+    unsigned tckps = (tcon >> 4) & 7u;
+    static const uint32_t prescale8[8] = { 1, 2, 4, 8, 16, 32, 64, 256 };
+    uint64_t pre = prescale8[tckps];
+    uint64_t ticks = (uint64_t)(pr + 1u) * pre;
+
+    if (ticks == 0) {
+        return 1000000ull;
+    }
+    return (ticks * 1000000000ull) / PIC32MX3_PBCLK_HZ;
+}
+
+static uint64_t pic32mx3_tmr_period_ns(pic32_t *s, int idx)
+{
+    uint32_t tcon, pr;
+
+    switch (idx) {
+    case 0:                     /* T1 Type A */
+        tcon = VALUE(T1CON);
+        pr = (uint16_t)VALUE(PR1);
+        if (tcon & (1u << 1)) { /* TCS external clock — stub */
+            return 1000000000ull;
+        }
+        {
+            unsigned tckps = (tcon >> 4) & 3u;
+            static const uint32_t prescale4[4] = { 1, 8, 64, 256 };
+            uint64_t pre = prescale4[tckps];
+            uint64_t ticks = (uint64_t)(pr + 1u) * pre;
+
+            if (ticks == 0) {
+                return 1000000ull;
+            }
+            return (ticks * 1000000000ull) / PIC32MX3_PBCLK_HZ;
+        }
+    case 1:
+        return pic32mx3_typeb_period_ns(VALUE(T2CON), (uint16_t)VALUE(PR2));
+    case 2:
+        return pic32mx3_typeb_period_ns(VALUE(T3CON), (uint16_t)VALUE(PR3));
+    case 3:
+        return pic32mx3_typeb_period_ns(VALUE(T4CON), (uint16_t)VALUE(PR4));
+    case 4:
+        return pic32mx3_typeb_period_ns(VALUE(T5CON), (uint16_t)VALUE(PR5));
+    default:
+        return 1000000ull;
+    }
+}
+
+static void pic32mx3_tmr_recompute(pic32_t *s, int idx);
+static void pic32mx3_tmrs_recompute_all(pic32_t *s);
+
+/*
+ * Output compare (minimal): OCxIF when the selected time base wraps.  OCTSEL
+ * bit 3: 0 = Timer2 (tmr idx 1), 1 = Timer3 (tmr idx 2).  Any non-zero OCM
+ * enables the pulse.  Pin/compare value accuracy is not modeled (uart-cli).
+ */
+static void pic32mx3_oc_raise_for_timer(pic32_t *s, int tmr_idx)
+{
+    static const uint32_t oc_con[5] = {
+        OC1CON, OC2CON, OC3CON, OC4CON, OC5CON
+    };
+    static const int oc_irq[5] = { 7, 12, 17, 22, 27 };
+    int i;
+
+    if (tmr_idx != 1 && tmr_idx != 2) {
+        return;
+    }
+    for (i = 0; i < 5; i++) {
+        unsigned con = VALUE(oc_con[i]);
+        unsigned ocm = con & 7u;
+
+        if (ocm == 0u) {
+            continue;
+        }
+        if (((con >> 3) & 1u) != (unsigned)(tmr_idx - 1)) {
+            continue;
+        }
+        irq_raise(s, oc_irq[i]);
+    }
+}
+
+static void pic32mx3_tmr_cb(void *opaque)
+{
+    Pic32Mx3TmrOpaque *o = opaque;
+    pic32_t *s = o->mcu;
+    int idx = o->idx;
+
+    switch (idx) {
+    case 0:
+        if (!(VALUE(T1CON) & 0x8000u)) {
+            return;
+        }
+        VALUE(TMR1) = 0;
+        break;
+    case 1:
+        if (!(VALUE(T2CON) & 0x8000u)) {
+            return;
+        }
+        VALUE(TMR2) = 0;
+        break;
+    case 2:
+        if (!(VALUE(T3CON) & 0x8000u)) {
+            return;
+        }
+        VALUE(TMR3) = 0;
+        break;
+    case 3:
+        if (!(VALUE(T4CON) & 0x8000u)) {
+            return;
+        }
+        VALUE(TMR4) = 0;
+        break;
+    case 4:
+        if (!(VALUE(T5CON) & 0x8000u)) {
+            return;
+        }
+        VALUE(TMR5) = 0;
+        break;
+    default:
+        return;
+    }
+    irq_raise(s, pic32mx3_tmr_ifs_irq[idx]);
+    pic32mx3_oc_raise_for_timer(s, idx);
+    pic32mx3_tmr_recompute(s, idx);
+}
+
+static void pic32mx3_tmr_recompute(pic32_t *s, int idx)
+{
+    uint32_t tcon;
+
+    if (idx < 0 || idx >= PIC32_MX3_N_TMRS || !s->tmr_timer[idx]) {
+        return;
+    }
+    switch (idx) {
+    case 0: tcon = VALUE(T1CON); break;
+    case 1: tcon = VALUE(T2CON); break;
+    case 2: tcon = VALUE(T3CON); break;
+    case 3: tcon = VALUE(T4CON); break;
+    case 4: tcon = VALUE(T5CON); break;
+    default:
+        return;
+    }
+    if (!(tcon & 0x8000u)) {
+        timer_del(s->tmr_timer[idx]);
+        return;
+    }
+    {
+        uint64_t per = pic32mx3_tmr_period_ns(s, idx);
+
+        if (per < 1000ull) {
+            per = 1000ull;
+        }
+        timer_mod(s->tmr_timer[idx],
+                  pic32mx3_tmr3_clock_get_ns() + per);
+    }
+}
+
+static void pic32mx3_tmrs_recompute_all(pic32_t *s)
+{
+    int i;
+
+    for (i = 0; i < PIC32_MX3_N_TMRS; i++) {
+        pic32mx3_tmr_recompute(s, i);
+    }
+}
+
 /*
  * Perform an assign/clear/set/invert operation.
  */
@@ -268,6 +534,61 @@ static inline unsigned write_op(int a, int b, int op)
     case 0xc: a ^= b;  break;   // Invert
     }
     return a;
+}
+
+/*
+ * PIC32MX350F256H maps ports B–G with ANSEL and per-port change-notification
+ * registers every 0x100 bytes starting at 0xBF886100 (physical offset 0x86100).
+ * See Microchip p32mx350f256h.h — distinct from the compact map used for MX7.
+ */
+#define MX350_PORT0       0x86100
+#define MX350_PORT_STRIDE 0x100
+#define MX350_NPORTS      6
+
+static inline int mx350_port_index(unsigned offset)
+{
+    if (offset < MX350_PORT0) {
+        return -1;
+    }
+    offset -= MX350_PORT0;
+    if (offset >= MX350_NPORTS * MX350_PORT_STRIDE) {
+        return -1;
+    }
+    return (int) (offset / MX350_PORT_STRIDE);
+}
+
+static void mx350_port_write(pic32_t *s, unsigned offset, unsigned data)
+{
+    int port = mx350_port_index(offset);
+    unsigned base = MX350_PORT0 + (unsigned) port * MX350_PORT_STRIDE;
+    unsigned reg = offset - base;
+    unsigned lat_word = base + 0x30;
+
+    if (reg >= 0x20 && reg <= 0x2c) {
+        s->iomem[lat_word >> 2] = write_op(s->iomem[lat_word >> 2], data, offset);
+        pic32_gpio_write(s, port, s->iomem[lat_word >> 2]);
+        return;
+    }
+    if (reg >= 0x30 && reg <= 0x3c) {
+        s->iomem[lat_word >> 2] = write_op(s->iomem[lat_word >> 2], data, offset);
+        pic32_gpio_write(s, port, s->iomem[lat_word >> 2]);
+        return;
+    }
+    s->iomem[offset >> 2] = write_op(s->iomem[offset >> 2], data, offset);
+}
+
+/* Peripheral Pin Select (input + output), PIC32MX350 — see p32mx350f256h.h ~0xBF80FA00–0xBF80FCAF */
+#define MX350_PPS_FIRST 0xfa00
+#define MX350_PPS_LAST  0xfcff
+
+static inline int mx350_pps_offset(unsigned offset)
+{
+    return offset >= MX350_PPS_FIRST && offset <= MX350_PPS_LAST;
+}
+
+static void mx350_pps_write(pic32_t *s, unsigned offset, unsigned data)
+{
+    s->iomem[offset >> 2] = write_op(s->iomem[offset >> 2], data, offset);
 }
 
 static void io_reset(pic32_t *s)
@@ -297,6 +618,9 @@ static void io_reset(pic32_t *s)
     VALUE(OSCTUN) = 0;
     VALUE(DDPCON) = 0;
     VALUE(SYSKEY) = 0;
+    VALUE(REFOCON) = 0;
+    VALUE(REFOTRIM) = 0;
+    VALUE(CFGCON) = 0;
     VALUE(RCON)   = 0;
     VALUE(RSWRST) = 0;
     s->syskey_unlock = 0;
@@ -310,6 +634,9 @@ static void io_reset(pic32_t *s)
     VALUE(AD1CHS)  = 0;                 // Channel select
     VALUE(AD1CSSL) = 0;                 // Input scan selection
     VALUE(AD1PCFG) = 0;                 // Port configuration
+    for (int i = 0; i < 16; i++) {
+        VALUE((ADC1BUF0 + i * 0x10)) = 0;
+    }
 
     /*
      * General purpose IO signals.
@@ -345,8 +672,24 @@ static void io_reset(pic32_t *s)
     VALUE(CNEN)  = 0;                   // Input change interrupt enable
     VALUE(CNPUE) = 0;                   // Input pin pull-up enable
 
+    /* MX350 expanded GPIO (ANSEL/CN per port) at Microchip addresses. */
+    for (int p = 0; p < MX350_NPORTS; p++) {
+        unsigned b = MX350_PORT0 + p * MX350_PORT_STRIDE;
+
+        s->iomem[(b + 0x00) >> 2] = 0;
+        s->iomem[(b + 0x10) >> 2] = 0xFFFF; /* TRIS */
+        s->iomem[(b + 0x20) >> 2] = 0xFFFF; /* PORT */
+        s->iomem[(b + 0x30) >> 2] = 0xFFFF; /* LAT */
+        s->iomem[(b + 0x40) >> 2] = 0;      /* ODC */
+        s->iomem[(b + 0x50) >> 2] = 0;      /* CNPU */
+        s->iomem[(b + 0x60) >> 2] = 0;      /* CNPD */
+        s->iomem[(b + 0x70) >> 2] = 0;      /* CNCON */
+        s->iomem[(b + 0x80) >> 2] = 0;      /* CNEN */
+        s->iomem[(b + 0x90) >> 2] = 0;      /* CNSTAT */
+    }
+
     /*
-     * Reset UARTs. MX350F256H has U1 and U2 only.
+     * Reset UARTs. MX350F256H: U1, U2, U3 (host -serial stdio is wired to U3).
      */
     VALUE(U1MODE)  = 0;
     VALUE(U1STA)   = PIC32_USTA_RIDLE | PIC32_USTA_TRMT;
@@ -358,6 +701,11 @@ static void io_reset(pic32_t *s)
     VALUE(U2TXREG) = 0;
     VALUE(U2RXREG) = 0;
     VALUE(U2BRG)   = 0;
+    VALUE(U3MODE)  = 0;
+    VALUE(U3STA)   = PIC32_USTA_RIDLE | PIC32_USTA_TRMT;
+    VALUE(U3TXREG) = 0;
+    VALUE(U3RXREG) = 0;
+    VALUE(U3BRG)   = 0;
 
     /*
      * Reset SPI. MX350F256H has SPI1, SPI2, SPI3.
@@ -383,6 +731,16 @@ static void io_reset(pic32_t *s)
      * Reset Watchdog timer.
      */
     VALUE(WDTCON) = 0;
+
+    /*
+     * Reset NVM controller (idle).
+     */
+    VALUE(NVMCON) = 0;
+    VALUE(NVMKEY) = 0;
+    VALUE(NVMADDR) = 0;
+    VALUE(NVMDATA) = 0;
+    VALUE(NVMSRCADDR) = 0;
+    pic32mx3_nvm_reset(s);
 
     /*
      * Reset Comparator voltage reference.
@@ -430,10 +788,13 @@ static void io_reset(pic32_t *s)
     VALUE(TMR5)  = 0;
     VALUE(PR5)   = 0xFFFF;
 
+    pic32mx3_tmrs_recompute_all(s);
+
     /*
      * Reset Input Capture IC1-IC5.
      */
     VALUE(IC1CON) = 0;
+    VALUE(IC1BUF) = 0;
     VALUE(IC2CON) = 0;
     VALUE(IC3CON) = 0;
     VALUE(IC4CON) = 0;
@@ -477,11 +838,43 @@ static void io_reset(pic32_t *s)
     VALUE(PMDIN)  = 0;
     VALUE(PMAEN)  = 0;
     VALUE(PMSTAT) = 0;
+
+    /*
+     * Clear interrupt controller latched flags and enables.  On silicon, system
+     * reset (including the RSWRST path) clears IFS/IEC; leaving them across
+     * io_reset() caused stale T1IE/T3IE (etc.) to pair with new TMR IRQs right
+     * after qemu_system_reset_request(), firing ISRs before guest init.
+     */
+    VALUE(IFS0) = 0;
+    VALUE(IFS1) = 0;
+    VALUE(IFS2) = 0;
+    VALUE(IEC0) = 0;
+    VALUE(IEC1) = 0;
+    VALUE(IEC2) = 0;
+    update_irq_status(s);
+
+    s->cpu->env.eic_multivec = (VALUE(INTCON) & PIC32_INTCON_MVEC) != 0;
+    s->cpu->env.eic_vector = 0;
 }
 
 static unsigned io_read32(pic32_t *s, unsigned offset, const char **namep)
 {
     unsigned *bufp = &VALUE(offset);
+
+    if (mx350_port_index(offset) >= 0) {
+        *namep = "mx350.gpio";
+        return s->iomem[offset >> 2];
+    }
+    if (mx350_pps_offset(offset)) {
+        *namep = "mx350.pps";
+        return s->iomem[offset >> 2];
+    }
+
+    /* PMD*, ANCFG, etc.: stub until modeled (gap before RCON at 0xF600). */
+    if (offset >= 0xf270 && offset < 0xf600) {
+        *namep = "mx350.sysstub";
+        return s->iomem[offset >> 2];
+    }
 
     switch (offset) {
     /*-------------------------------------------------------------------------
@@ -534,6 +927,18 @@ static unsigned io_read32(pic32_t *s, unsigned offset, const char **namep)
     STORAGE(DDPCON); break;     // Debug Data Port Control
     STORAGE(DEVID); break;      // Device Identifier
     STORAGE(SYSKEY); break;     // System Key
+    STORAGE(REFOCON); break;
+    STORAGE(REFOCONCLR); *bufp = 0; break;
+    STORAGE(REFOCONSET); *bufp = 0; break;
+    STORAGE(REFOCONINV); *bufp = 0; break;
+    STORAGE(REFOTRIM); break;
+    STORAGE(REFOTRIMCLR); *bufp = 0; break;
+    STORAGE(REFOTRIMSET); *bufp = 0; break;
+    STORAGE(REFOTRIMINV); *bufp = 0; break;
+    STORAGE(CFGCON); break;
+    STORAGE(CFGCONCLR); *bufp = 0; break;
+    STORAGE(CFGCONSET); *bufp = 0; break;
+    STORAGE(CFGCONINV); *bufp = 0; break;
     STORAGE(RCON); break;       // Reset Control
     STORAGE(RSWRST);            // Software Reset
         if ((VALUE(RSWRST) & 1) && s->stop_on_reset) {
@@ -691,6 +1096,28 @@ static unsigned io_read32(pic32_t *s, unsigned offset, const char **namep)
     STORAGE(U2BRGINV);  *bufp = 0; break;
 
     /*-------------------------------------------------------------------------
+     * UART 3.
+     */
+    STORAGE(U3RXREG);                           // Receive data
+        *bufp = pic32_uart_get_char(s, 2);
+        break;
+    STORAGE(U3BRG); break;                      // Baud rate
+    STORAGE(U3MODE); break;                     // Mode
+    STORAGE(U3STA);                             // Status and control
+        pic32_uart_poll_status(s, 2);
+        break;
+    STORAGE(U3TXREG);   *bufp = 0; break;       // Transmit
+    STORAGE(U3MODECLR); *bufp = 0; break;
+    STORAGE(U3MODESET); *bufp = 0; break;
+    STORAGE(U3MODEINV); *bufp = 0; break;
+    STORAGE(U3STACLR);  *bufp = 0; break;
+    STORAGE(U3STASET);  *bufp = 0; break;
+    STORAGE(U3STAINV);  *bufp = 0; break;
+    STORAGE(U3BRGCLR);  *bufp = 0; break;
+    STORAGE(U3BRGSET);  *bufp = 0; break;
+    STORAGE(U3BRGINV);  *bufp = 0; break;
+
+    /*-------------------------------------------------------------------------
      * SPI 1.
      */
     STORAGE(SPI1CON); break;                    // Control
@@ -751,6 +1178,15 @@ static unsigned io_read32(pic32_t *s, unsigned offset, const char **namep)
      * Watchdog timer.
      */
     STORAGE(WDTCON); break;
+
+    /*-------------------------------------------------------------------------
+     * Flash NVM control (word/row program, page erase — see pic32mx3_nvm.c).
+     */
+    STORAGE(NVMCON); break;
+    STORAGE(NVMKEY); break;
+    STORAGE(NVMADDR); break;
+    STORAGE(NVMDATA); break;
+    STORAGE(NVMSRCADDR); break;
 
     /*-------------------------------------------------------------------------
      * Comparator voltage reference.
@@ -871,9 +1307,145 @@ static unsigned io_read32(pic32_t *s, unsigned offset, const char **namep)
     return *bufp;
 }
 
+/*
+ * Minimal ADC1 model for pic32mx3-generic: manual conversion when SAMP goes 1->0
+ * with ADON set. Fills ADC1BUF0 with a deterministic 10-bit pattern per CH0SA
+ * (guest-visible; uart-cli "adc all" regression).
+ */
+#define AD1CON1_DONE  0x00000001u
+#define AD1CON1_SAMP  0x00000002u
+#define AD1CON1_ADON  0x00008000u
+
+static void pic32mx3_adc_after_ad1con1_write(pic32_t *s, unsigned prev, unsigned newv)
+{
+    if (!(newv & AD1CON1_ADON)) {
+        return;
+    }
+    /* Begin sampling: clear DONE (matches silicon when SAMP is set). */
+    if (!(prev & AD1CON1_SAMP) && (newv & AD1CON1_SAMP)) {
+        VALUE(AD1CON1) = newv & ~AD1CON1_DONE;
+        return;
+    }
+    /* End sampling -> conversion done (instant in QEMU). */
+    if ((prev & AD1CON1_SAMP) && !(newv & AD1CON1_SAMP)) {
+        unsigned ch = (VALUE(AD1CHS) >> 16) & 0x1fu;
+        unsigned res = (ch * 67u + 11u) & 0x3ffu;
+
+        VALUE(ADC1BUF0) = res;
+        VALUE(AD1CON1) = newv | AD1CON1_DONE;
+        irq_raise(s, 28); /* IFS0 AD1IF */
+    }
+}
+
+/*
+ * Parallel Master Port (stub): a PMDOUT write with PMP enabled and master mode
+ * 1/2 completes immediately — PMDIN gets a deterministic XOR pattern, BUSY
+ * clears, and PMPIF is raised if IRQM requests interrupt-on-cycle-end.
+ */
+static void pic32mx3_pmp_after_pmdout_write(pic32_t *s)
+{
+    unsigned pmc = VALUE(PMCON);
+    unsigned pmm = VALUE(PMMODE);
+    unsigned dout;
+    unsigned mode = pmm & PIC32_PMMODE_MODE;
+
+    if ((pmc & PIC32_PMCON_ON) == 0) {
+        return;
+    }
+    if (mode != PIC32_PMMODE_MODE_MAST1 && mode != PIC32_PMMODE_MODE_MAST2) {
+        return;
+    }
+    dout = VALUE(PMDOUT) & 0xffffu;
+    if (pmm & PIC32_PMMODE_MODE16) {
+        VALUE(PMDIN) = dout ^ 0xa5a5u;
+    } else {
+        VALUE(PMDIN) = (dout & 0xffu) ^ 0x5au;
+    }
+    VALUE(PMMODE) &= ~PIC32_PMMODE_BUSY;
+    if (pmm & PIC32_PMMODE_IRQM_END) {
+        irq_raise(s, 51); /* IFS1 PMPIF */
+    }
+}
+
+/* IC1: ON + non-zero ICM — instant capture from TMR2/TMR3 (ICTMR), IC1IF (IFS0 bit 6). */
+#define IC1CON_ON       0x8000u
+#define IC1CON_ICM_M    0x0007u
+#define IC1CON_ICTMR    0x0080u
+
+static void pic32mx3_ic1con_after_write(pic32_t *s, unsigned newv)
+{
+    unsigned icm = newv & IC1CON_ICM_M;
+
+    if (!(newv & IC1CON_ON) || icm == 0) {
+        return;
+    }
+    {
+        unsigned tmr = (newv & IC1CON_ICTMR) ? VALUE(TMR3) : VALUE(TMR2);
+
+        VALUE(IC1BUF) = tmr & 0xffffu;
+    }
+    irq_raise(s, 6); /* IC1IF */
+}
+
+static void pic32mx3_cm1con_after_write(pic32_t *s)
+{
+    if (VALUE(CM1CON) & 0x8000u) {
+        VALUE(CMSTAT) |= 1u; /* C1OUT */
+        irq_raise(s, 32);    /* IFS1 CMP1IF */
+    } else {
+        VALUE(CMSTAT) &= ~1u;
+    }
+}
+
+static void pic32mx3_cm2con_after_write(pic32_t *s)
+{
+    if (VALUE(CM2CON) & 0x8000u) {
+        VALUE(CMSTAT) |= 2u; /* C2OUT */
+        irq_raise(s, 33);    /* IFS1 CMP2IF */
+    } else {
+        VALUE(CMSTAT) &= ~2u;
+    }
+}
+
+/* I2C TRN write with I2CxCON ON: loopback into RCV + master IF (IFS1 43 / 61). */
+static void pic32mx3_i2c_trn_write(pic32_t *s, int port, unsigned data)
+{
+    unsigned con = port == 0 ? VALUE(I2C1CON) : VALUE(I2C2CON);
+    unsigned xorv = port == 0 ? 0xaaU : 0x55U;
+    unsigned b = data & 0xffu;
+
+    if (!(con & 0x8000u)) {
+        return;
+    }
+    if (port == 0) {
+        VALUE(I2C1RCV) = b ^ xorv;
+        irq_raise(s, 43);
+    } else {
+        VALUE(I2C2RCV) = b ^ xorv;
+        irq_raise(s, 61);
+    }
+}
+
 static void io_write32(pic32_t *s, unsigned offset, unsigned data, const char **namep)
 {
     unsigned *bufp = &VALUE(offset);
+
+    if (mx350_port_index(offset) >= 0) {
+        *namep = "mx350.gpio";
+        mx350_port_write(s, offset, data);
+        return;
+    }
+    if (mx350_pps_offset(offset)) {
+        *namep = "mx350.pps";
+        mx350_pps_write(s, offset, data);
+        return;
+    }
+
+    if (offset >= 0xf270 && offset < 0xf600) {
+        *namep = "mx350.sysstub";
+        s->iomem[offset >> 2] = write_op(s->iomem[offset >> 2], data, offset);
+        return;
+    }
 
     switch (offset) {
     /*-------------------------------------------------------------------------
@@ -891,15 +1463,47 @@ static void io_write32(pic32_t *s, unsigned offset, unsigned data, const char **
     /*-------------------------------------------------------------------------
      * Interrupt controller registers.
      */
-    WRITEOP(INTCON); return;    // Interrupt Control
+    case INTCON:
+    case INTCON + 4:
+    case INTCON + 8:
+    case INTCON + 12:
+        *namep = "INTCON";
+        VALUE(INTCON) = write_op(VALUE(INTCON), data, offset);
+        s->cpu->env.eic_multivec = (VALUE(INTCON) & PIC32_INTCON_MVEC) != 0;
+        return;
     READONLY(INTSTAT);          // Interrupt Status
     WRITEOP(IPTMR);  return;    // Temporal Proximity Timer
     WRITEOP(IFS0); goto irq;    // IFS(0..2) - Interrupt Flag Status
     WRITEOP(IFS1); goto irq;
     WRITEOP(IFS2); goto irq;
     WRITEOP(IEC0); goto irq;    // IEC(0..2) - Interrupt Enable Control
-    WRITEOP(IEC1); goto irq;
-    WRITEOP(IEC2); goto irq;
+    case IEC1:
+    case IEC1 + 4:              /* CLR */
+    case IEC1 + 8:              /* SET */
+    case IEC1 + 12:             /* INV */
+        *namep = "IEC1";
+        {
+            uint32_t prev = VALUE(IEC1);
+            VALUE(IEC1) = write_op(prev, data, offset);
+            {
+                uint32_t nw = VALUE(IEC1);
+
+                pic32_uart_on_tx_ie_enabled(s, 0, prev, nw);
+                pic32_uart_on_tx_ie_enabled(s, 1, prev, nw);
+            }
+        }
+        goto irq;
+    case IEC2:
+    case IEC2 + 4:              /* CLR */
+    case IEC2 + 8:              /* SET */
+    case IEC2 + 12:             /* INV */
+        *namep = "IEC2";
+        {
+            uint32_t prev = VALUE(IEC2);
+            VALUE(IEC2) = write_op(prev, data, offset);
+            pic32_uart_on_tx_ie_enabled(s, 2, prev, VALUE(IEC2));
+        }
+        goto irq;
     WRITEOP(IPC0); goto irq;    // IPC(0..11) - Interrupt Priority Control
     WRITEOP(IPC1); goto irq;
     WRITEOP(IPC2); goto irq;
@@ -913,7 +1517,8 @@ static void io_write32(pic32_t *s, unsigned offset, unsigned data, const char **
     WRITEOP(IPC10); goto irq;
     WRITEOP(IPC11); goto irq;
     WRITEOP(IPC12);
-irq:    update_irq_status(s);
+irq:    pic32mx3_tmrs_recompute_all(s);
+        update_irq_status(s);
         return;
 
     /*-------------------------------------------------------------------------
@@ -929,14 +1534,20 @@ irq:    update_irq_status(s);
     STORAGE(DDPCON); break;     // Debug Data Port Control
     READONLY(DEVID);            // Device Identifier
     STORAGE(SYSKEY);            // System Key
-        /* Unlock state machine. */
-        if (s->syskey_unlock == 0 && VALUE(SYSKEY) == 0xaa996655)
-            s->syskey_unlock = 1;
-        if (s->syskey_unlock == 1 && VALUE(SYSKEY) == 0x556699aa)
-            s->syskey_unlock = 2;
-        else
+        /* Unlock state machine: compare the write data (register is old until *bufp). */
+        if (data == 0) {
             s->syskey_unlock = 0;
+        } else if (s->syskey_unlock == 0 && data == 0xaa996655) {
+            s->syskey_unlock = 1;
+        } else if (s->syskey_unlock == 1 && data == 0x556699aa) {
+            s->syskey_unlock = 2;
+        } else {
+            s->syskey_unlock = 0;
+        }
         break;
+    WRITEOP(REFOCON); return;       /* Reference clock output (stub) */
+    WRITEOP(REFOTRIM); return;
+    WRITEOP(CFGCON); return;        /* Configuration control (stub) */
     WRITEOPR(RCON, PIC32_RCON_UNUSED); break;       // Reset Control
     WRITEOP(RSWRST);            // Software Reset
         if (s->syskey_unlock == 2 && (VALUE(RSWRST) & 1)) {
@@ -959,7 +1570,16 @@ irq:    update_irq_status(s);
     /*-------------------------------------------------------------------------
      * Analog to digital converter.
      */
-    WRITEOP(AD1CON1); return;   // Control register 1
+    case AD1CON1: *namep = "AD1CON1"; goto op_AD1CON1;
+    case AD1CON1CLR: *namep = "AD1CON1CLR"; goto op_AD1CON1;
+    case AD1CON1SET: *namep = "AD1CON1SET"; goto op_AD1CON1;
+    case AD1CON1INV: *namep = "AD1CON1INV"; op_AD1CON1: {
+            unsigned prev = VALUE(AD1CON1);
+
+            VALUE(AD1CON1) = write_op(prev, data, offset);
+            pic32mx3_adc_after_ad1con1_write(s, prev, VALUE(AD1CON1));
+        }
+        return;
     WRITEOP(AD1CON2); return;   // Control register 2
     WRITEOP(AD1CON3); return;   // Control register 3
     WRITEOP(AD1CHS); return;    // Channel select
@@ -1108,6 +1728,23 @@ irq:    update_irq_status(s);
     READONLY(U2RXREG);                              // Receive
 
     /*-------------------------------------------------------------------------
+     * UART 3.
+     */
+    STORAGE(U3TXREG);                               // Transmit
+        pic32_uart_put_char(s, 2, data);
+        break;
+    WRITEOP(U3MODE);                                // Mode
+        pic32_uart_update_mode(s, 2);
+        return;
+    WRITEOPR(U3STA,                                 // Status and control
+        PIC32_USTA_URXDA | PIC32_USTA_FERR | PIC32_USTA_PERR |
+        PIC32_USTA_RIDLE | PIC32_USTA_TRMT | PIC32_USTA_UTXBF);
+        pic32_uart_update_status(s, 2);
+        return;
+    WRITEOP(U3BRG); return;                         // Baud rate
+    READONLY(U3RXREG);                              // Receive
+
+    /*-------------------------------------------------------------------------
      * SPI.
      */
     WRITEOP(SPI1CON);                               // Control
@@ -1144,6 +1781,34 @@ irq:    update_irq_status(s);
     WRITEOP(WDTCON); return;
 
     /*-------------------------------------------------------------------------
+     * Flash NVM control.
+     */
+    case NVMKEY:
+    case NVMKEY + 4:
+    case NVMKEY + 8:
+    case NVMKEY + 12:
+        *namep = "NVMKEY";
+        pic32mx3_nvm_key_write(s, write_op(VALUE(NVMKEY), data, offset));
+        VALUE(NVMKEY) = 0;
+        return;
+    WRITEOP(NVMADDR); return;
+    WRITEOP(NVMDATA); return;
+    WRITEOP(NVMSRCADDR); return;
+    case NVMCON:
+    case NVMCONCLR:
+    case NVMCONSET:
+    case NVMCONINV:
+        *namep = "NVMCON";
+        {
+            uint32_t oldc = VALUE(NVMCON);
+            uint32_t newc = write_op(oldc, data, offset);
+
+            newc = pic32mx3_nvm_nvmcon_write(s, oldc, newc);
+            VALUE(NVMCON) = newc;
+        }
+        return;
+
+    /*-------------------------------------------------------------------------
      * Comparator voltage reference.
      */
     WRITEOP(CVRCON); return;
@@ -1151,8 +1816,22 @@ irq:    update_irq_status(s);
     /*-------------------------------------------------------------------------
      * Comparators.
      */
-    WRITEOP(CM1CON); return;
-    WRITEOP(CM2CON); return;
+    case CM1CON:
+    case CM1CONCLR:
+    case CM1CONSET:
+    case CM1CONINV:
+        *namep = "CM1CON";
+        VALUE(CM1CON) = write_op(VALUE(CM1CON), data, offset);
+        pic32mx3_cm1con_after_write(s);
+        return;
+    case CM2CON:
+    case CM2CONCLR:
+    case CM2CONSET:
+    case CM2CONINV:
+        *namep = "CM2CON";
+        VALUE(CM2CON) = write_op(VALUE(CM2CON), data, offset);
+        pic32mx3_cm2con_after_write(s);
+        return;
     WRITEOP(CM3CON); return;
     WRITEOP(CMSTAT); return;
 
@@ -1169,26 +1848,138 @@ irq:    update_irq_status(s);
     /*-------------------------------------------------------------------------
      * Timers T1-T5.
      */
-    WRITEOP(T1CON); return;
-    WRITEOP(TMR1); return;
-    WRITEOP(PR1); return;
-    WRITEOP(T2CON); return;
-    WRITEOP(TMR2); return;
-    WRITEOP(PR2); return;
-    WRITEOP(T3CON); return;
-    WRITEOP(TMR3); return;
-    WRITEOP(PR3); return;
-    WRITEOP(T4CON); return;
-    WRITEOP(TMR4); return;
-    WRITEOP(PR4); return;
-    WRITEOP(T5CON); return;
-    WRITEOP(TMR5); return;
-    WRITEOP(PR5); return;
+    case T1CON:
+    case T1CONCLR:
+    case T1CONSET:
+    case T1CONINV:
+        *namep = "T1CON";
+        VALUE(T1CON) = write_op(VALUE(T1CON), data, offset);
+        pic32mx3_tmr_recompute(s, 0);
+        return;
+    case TMR1:
+    case TMR1CLR:
+    case TMR1SET:
+    case TMR1INV:
+        *namep = "TMR1";
+        VALUE(TMR1) = write_op(VALUE(TMR1), data, offset);
+        pic32mx3_tmr_recompute(s, 0);
+        return;
+    case PR1:
+    case PR1CLR:
+    case PR1SET:
+    case PR1INV:
+        *namep = "PR1";
+        VALUE(PR1) = write_op(VALUE(PR1), data, offset);
+        pic32mx3_tmr_recompute(s, 0);
+        return;
+    case T2CON:
+    case T2CONCLR:
+    case T2CONSET:
+    case T2CONINV:
+        *namep = "T2CON";
+        VALUE(T2CON) = write_op(VALUE(T2CON), data, offset);
+        pic32mx3_tmr_recompute(s, 1);
+        return;
+    case TMR2:
+    case TMR2CLR:
+    case TMR2SET:
+    case TMR2INV:
+        *namep = "TMR2";
+        VALUE(TMR2) = write_op(VALUE(TMR2), data, offset);
+        pic32mx3_tmr_recompute(s, 1);
+        return;
+    case PR2:
+    case PR2CLR:
+    case PR2SET:
+    case PR2INV:
+        *namep = "PR2";
+        VALUE(PR2) = write_op(VALUE(PR2), data, offset);
+        pic32mx3_tmr_recompute(s, 1);
+        return;
+    case T3CON:
+    case T3CONCLR:
+    case T3CONSET:
+    case T3CONINV:
+        *namep = "T3CON";
+        VALUE(T3CON) = write_op(VALUE(T3CON), data, offset);
+        pic32mx3_tmr_recompute(s, 2);
+        return;
+    case TMR3:
+    case TMR3CLR:
+    case TMR3SET:
+    case TMR3INV:
+        *namep = "TMR3";
+        VALUE(TMR3) = write_op(VALUE(TMR3), data, offset);
+        pic32mx3_tmr_recompute(s, 2);
+        return;
+    case PR3:
+    case PR3CLR:
+    case PR3SET:
+    case PR3INV:
+        *namep = "PR3";
+        VALUE(PR3) = write_op(VALUE(PR3), data, offset);
+        pic32mx3_tmr_recompute(s, 2);
+        return;
+    case T4CON:
+    case T4CONCLR:
+    case T4CONSET:
+    case T4CONINV:
+        *namep = "T4CON";
+        VALUE(T4CON) = write_op(VALUE(T4CON), data, offset);
+        pic32mx3_tmr_recompute(s, 3);
+        return;
+    case TMR4:
+    case TMR4CLR:
+    case TMR4SET:
+    case TMR4INV:
+        *namep = "TMR4";
+        VALUE(TMR4) = write_op(VALUE(TMR4), data, offset);
+        pic32mx3_tmr_recompute(s, 3);
+        return;
+    case PR4:
+    case PR4CLR:
+    case PR4SET:
+    case PR4INV:
+        *namep = "PR4";
+        VALUE(PR4) = write_op(VALUE(PR4), data, offset);
+        pic32mx3_tmr_recompute(s, 3);
+        return;
+    case T5CON:
+    case T5CONCLR:
+    case T5CONSET:
+    case T5CONINV:
+        *namep = "T5CON";
+        VALUE(T5CON) = write_op(VALUE(T5CON), data, offset);
+        pic32mx3_tmr_recompute(s, 4);
+        return;
+    case TMR5:
+    case TMR5CLR:
+    case TMR5SET:
+    case TMR5INV:
+        *namep = "TMR5";
+        VALUE(TMR5) = write_op(VALUE(TMR5), data, offset);
+        pic32mx3_tmr_recompute(s, 4);
+        return;
+    case PR5:
+    case PR5CLR:
+    case PR5SET:
+    case PR5INV:
+        *namep = "PR5";
+        VALUE(PR5) = write_op(VALUE(PR5), data, offset);
+        pic32mx3_tmr_recompute(s, 4);
+        return;
 
     /*-------------------------------------------------------------------------
      * Input Capture IC1-IC5.
      */
-    WRITEOP(IC1CON); return;
+    case IC1CON:
+    case IC1CONCLR:
+    case IC1CONSET:
+    case IC1CONINV:
+        *namep = "IC1CON";
+        VALUE(IC1CON) = write_op(VALUE(IC1CON), data, offset);
+        pic32mx3_ic1con_after_write(s, VALUE(IC1CON));
+        return;
     WRITEOP(IC2CON); return;
     WRITEOP(IC3CON); return;
     WRITEOP(IC4CON); return;
@@ -1221,7 +2012,14 @@ irq:    update_irq_status(s);
     WRITEOP(I2C1ADD); return;
     WRITEOP(I2C1MSK); return;
     WRITEOP(I2C1BRG); return;
-    STORAGE(I2C1TRN); break;    // Transmit: write-only data register
+    case I2C1TRN:
+    case I2C1TRNCLR:
+    case I2C1TRNSET:
+    case I2C1TRNINV:
+        *namep = "I2C1TRN";
+        VALUE(I2C1TRN) = write_op(VALUE(I2C1TRN), data, offset);
+        pic32mx3_i2c_trn_write(s, 0, VALUE(I2C1TRN));
+        return;
     READONLY(I2C1RCV);          // Receive: read-only
 
     /*-------------------------------------------------------------------------
@@ -1232,7 +2030,14 @@ irq:    update_irq_status(s);
     WRITEOP(I2C2ADD); return;
     WRITEOP(I2C2MSK); return;
     WRITEOP(I2C2BRG); return;
-    STORAGE(I2C2TRN); break;    // Transmit: write-only data register
+    case I2C2TRN:
+    case I2C2TRNCLR:
+    case I2C2TRNSET:
+    case I2C2TRNINV:
+        *namep = "I2C2TRN";
+        VALUE(I2C2TRN) = write_op(VALUE(I2C2TRN), data, offset);
+        pic32mx3_i2c_trn_write(s, 1, VALUE(I2C2TRN));
+        return;
     READONLY(I2C2RCV);          // Receive: read-only
 
     /*-------------------------------------------------------------------------
@@ -1241,7 +2046,16 @@ irq:    update_irq_status(s);
     WRITEOP(PMCON); return;
     WRITEOP(PMMODE); return;
     WRITEOP(PMADDR); return;
-    WRITEOP(PMDOUT); return;
+    case PMDOUT: *namep = "PMDOUT"; goto op_PMDOUT;
+    case PMDOUTCLR: *namep = "PMDOUTCLR"; goto op_PMDOUT;
+    case PMDOUTSET: *namep = "PMDOUTSET"; goto op_PMDOUT;
+    case PMDOUTINV: *namep = "PMDOUTINV"; op_PMDOUT: {
+            unsigned prev = VALUE(PMDOUT);
+
+            VALUE(PMDOUT) = write_op(prev, data, offset);
+            pic32mx3_pmp_after_pmdout_write(s);
+        }
+        return;
     STORAGE(PMDIN); break;
     WRITEOP(PMAEN); return;
     READONLY(PMSTAT);
@@ -1399,7 +2213,13 @@ static void pic32_init(MachineState *machine, int board_type)
     DeviceState *dev = qdev_create(NULL, TYPE_MIPS_PIC32);
     pic32_t *s = OBJECT_CHECK(pic32_t, dev, TYPE_MIPS_PIC32);
     s->board_type = board_type;
-    s->stop_on_reset = 1;               /* halt simulation on soft reset */
+    /*
+     * If set, reading RSWRST with SWRST bit set calls exit(0).  That breaks
+     * real firmware (e.g. MPLAB Harmony) which unlocks SYSKEY, writes
+     * RSWRST, then polls RSWRST until the bit clears — they must keep running
+     * after qemu_system_reset_request() + io_reset (handled on RSWRST write).
+     */
+    s->stop_on_reset = 0;
     s->iomem = g_malloc0(IO_MEM_SIZE);  /* backing storage for I/O area */
 
     qdev_init_nofail(dev);
@@ -1459,6 +2279,14 @@ static void pic32_init(MachineState *machine, int board_type)
     }
     prog_ptr = memory_region_get_ram_ptr(prog_mem);
     boot_ptr = memory_region_get_ram_ptr(boot_mem);
+    pic32mx3_nvm_bind_flash(s, (uint8_t *)prog_ptr, (uint8_t *)boot_ptr,
+                            PROGRAM_FLASH_SIZE, BOOT_FLASH_SIZE,
+                            PROGRAM_FLASH_START, BOOT_FLASH_START);
+    /*
+     * Optional persisted images (-global mips-pic32mx3.prog-flash=…): erased
+     * (0xFF) then file contents; -kernel / ELF overwrites firmware regions.
+     */
+    pic32mx3_flash_load_images(s);
 
     /* Map flash into address space before ELF loading (rom infrastructure
      * writes via cpu_physical_memory_write_rom which requires mapped regions). */
@@ -1542,9 +2370,34 @@ static void pic32_init(MachineState *machine, int board_type)
         break;
     }
 
-    /* UARTs: MX350F256H has U1 and U2 only */
-    pic32_uart_init(s, 0, PIC32_IRQ_U1E, U1STA, U1MODE);
-    pic32_uart_init(s, 1, PIC32_IRQ_U2E, U2STA, U2MODE);
+    /*
+     * UARTs: U1/U2/U3.
+     * Host mapping for pic32mx3-generic:
+     *   -serial #0 -> UART3 (115200; guest PPS for TX/RX pins is not applied to the char backend.)
+     *   -serial #1 -> UART1 (e.g. debug on RE5/RF2)
+     *   -serial #2 -> UART2 (optional)
+     * Use "-serial null -serial stdio" if the image uses UART1 as console.
+     * Debug: QEMU_PIC32_TRACE_UART=1 logs each UxTXREG write (unit index).
+     * Flash persistence (NVS across runs):
+     *   -global mips-pic32mx3.prog-flash=/path/to/prog.bin
+     *   -global mips-pic32mx3.boot-flash=/path/to/boot.bin   (optional; board
+     *     DEVCFG words are still written after load — see pic32mx3_nvm.c)
+     */
+    /* Base IRQ = IFS1 UxEIF bit index (see irq_to_vector): U1 38, U2 56, U3 62 (+2 = U3TX in IFS2). */
+    pic32_uart_init(s, 0, 38, U1STA, U1MODE);
+    pic32_uart_init(s, 1, 56, U2STA, U2MODE);
+    pic32_uart_init(s, 2, 62, U3STA, U3MODE);
+    if (serial_hds[0]) {
+        s->uart[0].chr = NULL;
+        pic32_uart_attach_chr(s, 2, serial_hds[0]);
+    }
+    if (serial_hds[1]) {
+        s->uart[1].chr = NULL;
+        pic32_uart_attach_chr(s, 0, serial_hds[1]);
+    }
+    if (serial_hds[2]) {
+        pic32_uart_attach_chr(s, 1, serial_hds[2]);
+    }
 
     /* SPIs: MX350F256H has SPI1, SPI2, SPI3 */
     pic32_spi_init(s, 0, PIC32_IRQ_SPI1E, SPI1CON, SPI1STAT);
@@ -1581,7 +2434,23 @@ static void pic32_init(MachineState *machine, int board_type)
     pic32_sdcard_init(s, 1, "sd1", sd1_file, cs1_port, cs1_pin);
 
     io_reset(s);
+
+    {
+        int ti;
+
+        for (ti = 0; ti < PIC32_MX3_N_TMRS; ti++) {
+            s->tmr_opaque[ti].mcu = s;
+            s->tmr_opaque[ti].idx = ti;
+            if (!s->tmr_timer[ti]) {
+                s->tmr_timer[ti] = timer_new_ns(pic32mx3_tmr3_clock_type(),
+                                                pic32mx3_tmr_cb,
+                                                &s->tmr_opaque[ti]);
+            }
+        }
+    }
+
     pic32_sdcard_reset(s);
+    pic32mx3_flash_register_exit_save(s);
     pic32_pass_signal_chars();
 }
 
@@ -1595,11 +2464,19 @@ static int pic32_sysbus_device_init(SysBusDevice *sysbusdev)
     return 0;
 }
 
+static Property pic32_properties[] = {
+    DEFINE_PROP_STRING("prog-flash", pic32_t, prog_flash_path),
+    DEFINE_PROP_STRING("boot-flash", pic32_t, boot_flash_path),
+    DEFINE_PROP_END_OF_LIST(),
+};
+
 static void pic32_class_init(ObjectClass *klass, void *data)
 {
     SysBusDeviceClass *k = SYS_BUS_DEVICE_CLASS(klass);
+    DeviceClass *dc = DEVICE_CLASS(klass);
 
     k->init = pic32_sysbus_device_init;
+    dc->props = pic32_properties;
 }
 
 static const TypeInfo pic32_device = {

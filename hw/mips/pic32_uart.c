@@ -25,6 +25,7 @@
 #include "hw/char/serial.h"
 #include "sysemu/char.h"
 #include "pic32_peripherals.h"
+#include <stdlib.h>
 
 #include "pic32mz.h"
 
@@ -40,11 +41,20 @@ unsigned pic32_uart_get_char(pic32_t *s, int unit)
     uart_t *u = &s->uart[unit];
     unsigned value;
 
-    /* Read a byte from input queue. */
-    value = u->rxbyte;
-    VALUE(u->sta) &= ~PIC32_USTA_URXDA;
+    if (u->rx_len == 0) {
+        return 0;
+    }
+    /* Pop one byte from RX FIFO. */
+    value = u->rx_fifo[u->rx_rd];
+    u->rx_rd = (u->rx_rd + 1) % PIC32_UART_RX_FIFO;
+    u->rx_len--;
 
-    s->irq_clear(s, u->irq + UART_IRQ_RX);
+    if (u->rx_len == 0) {
+        VALUE(u->sta) &= ~PIC32_USTA_URXDA;
+        s->irq_clear(s, u->irq + UART_IRQ_RX);
+    } else {
+        VALUE(u->sta) |= PIC32_USTA_URXDA;
+    }
     return value;
 }
 
@@ -54,6 +64,10 @@ unsigned pic32_uart_get_char(pic32_t *s, int unit)
 void pic32_uart_put_char(pic32_t *s, int unit, unsigned char byte)
 {
     uart_t *u = &s->uart[unit];
+
+    if (getenv("QEMU_PIC32_TRACE_UART")) {
+        fprintf(stderr, "pic32 uart%u TX 0x%02x\n", unit, byte);
+    }
 
     if (! u->chr) {
         printf("--- %s(unit = %u) serial port not configured\n",
@@ -130,6 +144,31 @@ void pic32_uart_update_status(pic32_t *s, int unit)
 }
 
 /*
+ * When firmware sets the UART TX interrupt enable with data waiting (or an
+ * empty transmitter after IFSCLR), hardware asserts UxTXIF. Without this,
+ * interrupt-driven TX in the guest may never run.
+ */
+void pic32_uart_on_tx_ie_enabled(pic32_t *s, int unit, uint32_t prev_iec,
+                                 uint32_t new_iec)
+{
+    uart_t *u = &s->uart[unit];
+    unsigned tx_irq = u->irq + UART_IRQ_TX;
+    uint32_t tx_ie_mask = 1u << (tx_irq & 31);
+
+    if (!(new_iec & tx_ie_mask) || (prev_iec & tx_ie_mask)) {
+        return;
+    }
+    if (!u->chr) {
+        return;
+    }
+    if ((VALUE(u->mode) & PIC32_UMODE_ON) &&
+        (VALUE(u->sta) & PIC32_USTA_UTXEN) &&
+        !(VALUE(u->sta) & PIC32_USTA_UTXBF)) {
+        s->irq_raise(s, u->irq + UART_IRQ_TX);
+    }
+}
+
+/*
  * Return a number of free bytes in the receive FIFO.
  */
 static int uart_can_receive(void *opaque)
@@ -145,8 +184,7 @@ static int uart_can_receive(void *opaque)
         return 0;
     }
 
-    if (VALUE(u->sta) & PIC32_USTA_URXDA) {
-        /* Receive buffer full. */
+    if (u->rx_len >= PIC32_UART_RX_FIFO) {
         return 0;
     }
     return 1;
@@ -159,24 +197,26 @@ static void uart_receive(void *opaque, const uint8_t *buf, int size)
 {
     uart_t *u = opaque;
     pic32_t *s = u->mcu;        /* used in VALUE() */
+    int i;
 
-//printf("--- %s(%p) called\n", __func__, u);
     if (! (VALUE(u->mode) & PIC32_UMODE_ON) ||
         ! (VALUE(u->sta) & PIC32_USTA_URXEN)) {
         /* UART disabled. */
         return;
     }
 
-    if (VALUE(u->sta) & PIC32_USTA_URXDA) {
-        /* Receive buffer full. */
-        return;
+    /* Char backend may deliver multiple bytes per callback; queue all that fit. */
+    for (i = 0; i < size; i++) {
+        if (u->rx_len >= PIC32_UART_RX_FIFO) {
+            break;
+        }
+        u->rx_fifo[(u->rx_rd + u->rx_len) % PIC32_UART_RX_FIFO] = buf[i];
+        u->rx_len++;
     }
-
-    u->rxbyte = buf[0];
-    VALUE(u->sta) |= PIC32_USTA_URXDA;
-
-    /* Activate receive interrupt. */
-    s->irq_raise(s, u->irq + UART_IRQ_RX);
+    if (i > 0) {
+        VALUE(u->sta) |= PIC32_USTA_URXDA;
+        s->irq_raise(s, u->irq + UART_IRQ_RX);
+    }
 }
 
 /*
@@ -211,6 +251,8 @@ void pic32_uart_init(pic32_t *s, int unit, int irq, int sta, int mode)
     u->irq = irq;
     u->sta = sta;
     u->mode = mode;
+    u->rx_rd = 0;
+    u->rx_len = 0;
     u->transmit_timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, uart_timeout, u);
 
     if (unit >= MAX_SERIAL_PORTS) {
@@ -221,6 +263,20 @@ void pic32_uart_init(pic32_t *s, int unit, int irq, int sta, int mode)
     u->chr = serial_hds[unit];
 
     /* Setup callback functions. */
-    if (u->chr)
+    if (u->chr) {
         qemu_chr_add_handlers(u->chr, uart_can_receive, uart_receive, NULL, u);
+    }
+}
+
+/*
+ * Attach a host char device to a UART after pic32_uart_init (e.g. map -serial stdio to UART3).
+ */
+void pic32_uart_attach_chr(pic32_t *s, int unit, struct CharDriverState *chr)
+{
+    uart_t *u = &s->uart[unit];
+
+    u->chr = chr;
+    if (chr) {
+        qemu_chr_add_handlers(chr, uart_can_receive, uart_receive, NULL, u);
+    }
 }

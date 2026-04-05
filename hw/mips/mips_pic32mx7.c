@@ -218,8 +218,8 @@ static void update_irq_status(pic32_t *s)
                 if (v < 0)
                     continue;
 
-                int level = VALUE(IPC(v >> 2));
-                level >>= 2 + (v & 3) * 8;
+                int level = VALUE(IPC(irq >> 2));
+                level >>= 2 + (irq & 3) * 8;
                 level &= 7;
                 if (level > cause_ripl) {
                     vector = v;
@@ -228,6 +228,9 @@ static void update_irq_status(pic32_t *s)
             }
         }
         VALUE(INTSTAT) = vector | (cause_ripl << 8);
+        env->eic_vector = vector & 0xff;
+    } else {
+        env->eic_vector = 0;
     }
 
     if (cause_ripl == current_ripl)
@@ -450,6 +453,17 @@ static void io_reset(pic32_t *s)
         s->spi[i].rfifo = 0;
         s->spi[i].wfifo = 0;
     }
+
+    VALUE(IFS0) = 0;
+    VALUE(IFS1) = 0;
+    VALUE(IFS2) = 0;
+    VALUE(IEC0) = 0;
+    VALUE(IEC1) = 0;
+    VALUE(IEC2) = 0;
+    update_irq_status(s);
+
+    s->cpu->env.eic_multivec = (VALUE(INTCON) & PIC32_INTCON_MVEC) != 0;
+    s->cpu->env.eic_vector = 0;
 }
 
 static unsigned io_read32(pic32_t *s, unsigned offset, const char **namep)
@@ -861,7 +875,14 @@ static void io_write32(pic32_t *s, unsigned offset, unsigned data, const char **
     /*-------------------------------------------------------------------------
      * Interrupt controller registers.
      */
-    WRITEOP(INTCON); return;    // Interrupt Control
+    case INTCON:
+    case INTCON + 4:
+    case INTCON + 8:
+    case INTCON + 12:
+        *namep = "INTCON";
+        VALUE(INTCON) = write_op(VALUE(INTCON), data, offset);
+        s->cpu->env.eic_multivec = (VALUE(INTCON) & PIC32_INTCON_MVEC) != 0;
+        return;
     READONLY(INTSTAT);          // Interrupt Status
     WRITEOP(IPTMR);  return;    // Temporal Proximity Timer
     WRITEOP(IFS0); goto irq;    // IFS(0..2) - Interrupt Flag Status
@@ -899,13 +920,16 @@ irq:    update_irq_status(s);
     STORAGE(DDPCON); break;     // Debug Data Port Control
     READONLY(DEVID);            // Device Identifier
     STORAGE(SYSKEY);            // System Key
-        /* Unlock state machine. */
-        if (s->syskey_unlock == 0 && VALUE(SYSKEY) == 0xaa996655)
-            s->syskey_unlock = 1;
-        if (s->syskey_unlock == 1 && VALUE(SYSKEY) == 0x556699aa)
-            s->syskey_unlock = 2;
-        else
+        /* Unlock state machine: compare the write data (register is old until *bufp). */
+        if (data == 0) {
             s->syskey_unlock = 0;
+        } else if (s->syskey_unlock == 0 && data == 0xaa996655) {
+            s->syskey_unlock = 1;
+        } else if (s->syskey_unlock == 1 && data == 0x556699aa) {
+            s->syskey_unlock = 2;
+        } else {
+            s->syskey_unlock = 0;
+        }
         break;
     WRITEOPR(RCON, PIC32_RCON_UNUSED); break;       // Reset Control
     WRITEOP(RSWRST);            // Software Reset

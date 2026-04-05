@@ -1,0 +1,226 @@
+#!/usr/bin/expect -f
+# Part 1: full CLI on UART1 (second -serial = stdio).
+# Part 2: uart / switch / echo on U1–U3 via TCP (pic32mx3: serial#0->U3, #1->U1, #2->U2).
+# MX350 has three UARTs only; there is no UART4. Override base TCP port with PIC32_UART_TCP_BASE.
+#
+# Rebuild qemu-system-mipsel from this repo after any hw/mips PIC32 model change
+# (UART, timers, ADC, …) and pass that binary as argv0 — see README.txt.
+#
+# With -icount, pic32mx3 Timers T1–T5 use QEMU_CLOCK_VIRTUAL_RT; cpus.c runs those
+# timers on the TCG thread so busy-wait does not starve them.  ~10 s wall for
+# "timer".  shift=auto is fine.  Override shift if needed.
+#
+# NO_ICOUNT=1 — omit -icount (10 s guest delay finishes in a fraction of a second wall).
+# ICOUNT_SHIFT=N or auto — override default auto.
+set send_slow {1 0.012}
+set timeout 180
+set qemu [lindex $argv 0]
+set hex [lindex $argv 1]
+if {$qemu eq ""} {
+    set qemu "/data/projects/qemu/build-pic32-qemu/qemu-system-mipsel"
+}
+if {$hex eq ""} {
+    set hex "/data/projects/qemu/tests/pic32mx350-uart-cli/uart-cli-mx350.hex"
+}
+
+if {[info exists env(NO_ICOUNT)] && $env(NO_ICOUNT) ne ""} {
+    set icount_args {}
+} elseif {[info exists env(ICOUNT_SHIFT)] && $env(ICOUNT_SHIFT) ne ""} {
+    set icount_args [list -icount "shift=$env(ICOUNT_SHIFT)"]
+} else {
+    set icount_args {-icount shift=auto}
+}
+
+spawn -noecho $qemu {*}$icount_args -M pic32mx3-generic -nographic -monitor none \
+    -serial null -serial stdio -serial null -kernel $hex
+
+expect {
+    "\r\nU1> " {}
+    "\nU1> " {}
+    timeout { puts stderr "timeout: initial U1>"; exit 1 }
+}
+
+send -s "help\r"
+expect {
+    -re {OK help} {}
+    timeout { puts stderr "timeout: OK help"; exit 1 }
+}
+
+send -s "timer\r"
+expect {
+    -re {OK timer} {}
+    timeout { puts stderr "timeout: OK timer"; exit 1 }
+}
+
+# T1–T5 short delays (PIC32MX350F256H); each timer uses its own TxIF / period match.
+send -s "timer1_ms 30\r"
+expect {
+    -re {OK timer1_ms} {}
+    timeout { puts stderr "timeout: OK timer1_ms"; exit 1 }
+}
+send -s "timer2_ms 30\r"
+expect {
+    -re {OK timer2_ms} {}
+    timeout { puts stderr "timeout: OK timer2_ms"; exit 1 }
+}
+send -s "timer3_ms 30\r"
+expect {
+    -re {OK timer3_ms} {}
+    timeout { puts stderr "timeout: OK timer3_ms"; exit 1 }
+}
+send -s "timer4_ms 30\r"
+expect {
+    -re {OK timer4_ms} {}
+    timeout { puts stderr "timeout: OK timer4_ms"; exit 1 }
+}
+send -s "timer5_ms 30\r"
+expect {
+    -re {OK timer5_ms} {}
+    timeout { puts stderr "timeout: OK timer5_ms"; exit 1 }
+}
+
+# ADC1: guest manual sample per AN0-AN15; QEMU stub fills BUF0 (ch*67+11) & 0x3ff.
+send -s "adc all\r"
+expect {
+    -re {(?s)ch 00 v 11.*ch 15 v 1016.*OK adc all} {}
+    timeout { puts stderr "timeout: adc all (16 ch, qemu stub)"; exit 1 }
+}
+
+# OC1-OC5: QEMU raises OCxIF on T2/T3 period match when OCM!=0 (see mips_pic32mx3.c).
+send -s "ocmp all\r"
+expect {
+    -re {(?s)oc 1 t2.*oc 5 t2.*oc 1 t3.*OK ocmp all} {}
+    timeout { puts stderr "timeout: ocmp all"; exit 1 }
+}
+
+# PMP: PMDOUT write with master+IRQM fills PMDIN (XOR stub); PMPIF on IFS1 (mips_pic32mx3.c).
+send -s "pmp\r"
+expect {
+    -re {(?s)pmp16 28507.*pmp8 72.*OK pmp} {}
+    timeout { puts stderr "timeout: pmp (qemu stub)"; exit 1 }
+}
+
+# RCON/CVR access; IC1 + CMP instant stubs (mips_pic32mx3.c).
+send -s "misc phys\r"
+expect {
+    -re {(?s)rcon ok.*cvr 32783.*ic1 21930.*cm 1 3.*OK misc phys} {}
+    timeout { puts stderr "timeout: misc phys (rcon cvr ic1 cmp stubs)"; exit 1 }
+}
+
+# IFS SET/CLR walk (irq 0-75); CP0 core timer -> CTIF; I2C TRN QEMU stub.
+send -s "isr flags\r"
+expect {
+    -re {OK isr flags} {}
+    timeout { puts stderr "timeout: isr flags"; exit 1 }
+}
+send -s "isr ct\r"
+expect {
+    -re {OK isr ct} {}
+    timeout { puts stderr "timeout: isr ct (core timer)"; exit 1 }
+}
+send -s "i2c all\r"
+expect {
+    -re {(?s)i2c1 158.*i2c2 97.*OK i2c all} {}
+    timeout { puts stderr "timeout: i2c all (qemu stub)"; exit 1 }
+}
+
+# NVM: page erase + row + word (hw/mips/pic32mx3_nvm.c); no flash readback in guest.
+send -s "nvm all\r"
+expect {
+    -re {(?s)nvm: page_erase ok.*nvm: row ok.*nvm: word ok.*OK nvm all} {}
+    timeout { puts stderr "timeout: nvm all (page/row/word)"; exit 1 }
+}
+
+send -s "uart\r"
+expect {
+    -re {OK uart 1} {}
+    timeout { puts stderr "timeout: OK uart 1 (stdio)"; exit 1 }
+}
+send -s "switch 1\r"
+expect {
+    -re {OK switch 1} {}
+    timeout { puts stderr "timeout: OK switch 1 (stdio)"; exit 1 }
+}
+send -s "switch 2\r"
+expect {
+    -re {ERR switch: this is UART 1} {}
+    timeout { puts stderr "timeout: ERR switch wrong uart (stdio)"; exit 1 }
+}
+
+send -s "echo hello from uart1\r"
+expect {
+    -re {hello from uart1.*OK echo} {}
+    timeout { puts stderr "timeout: OK echo"; exit 1 }
+}
+
+catch {close -i $spawn_id}
+catch {wait -i $spawn_id}
+
+# --- Part 2: all UARTs over TCP (host switches by connecting to each port).
+if {[info exists env(PIC32_UART_TCP_BASE)]} {
+    set tcp_base $env(PIC32_UART_TCP_BASE)
+} else {
+    set tcp_base 7710
+}
+set port_u3 $tcp_base
+set port_u1 [expr {$tcp_base + 1}]
+set port_u2 [expr {$tcp_base + 2}]
+
+proc wait_tcp_listen {port} {
+    for {set i 0} {$i < 100} {incr i} {
+        if {![catch {exec nc -z 127.0.0.1 $port 2>/dev/null}]} {
+            return
+        }
+        sleep 0.05
+    }
+    puts stderr "tcp: 127.0.0.1:$port never accepted connections"
+    exit 1
+}
+
+proc uart_tcp_test {port unum echoline} {
+    wait_tcp_listen $port
+    spawn -noecho nc 127.0.0.1 $port
+    set sid $spawn_id
+    # TCP server drops bytes emitted before the client connects; boot already
+    # printed U1>/U2>/U3> so we must not wait for that prompt — prime with uart.
+    sleep 0.05
+    send -i $sid "uart\r"
+    expect {
+        -i $sid -re [format {OK uart %s} $unum] {}
+        -i $sid timeout { puts stderr "timeout: OK uart $unum tcp"; exit 1 }
+    }
+    send -i $sid "switch $unum\r"
+    expect {
+        -i $sid -re [format {OK switch %s} $unum] {}
+        -i $sid timeout { puts stderr "timeout: OK switch $unum tcp"; exit 1 }
+    }
+    send -i $sid "echo $echoline\r"
+    expect {
+        -i $sid -re "${echoline}.*OK echo" {}
+        -i $sid timeout { puts stderr "timeout: echo U$unum tcp"; exit 1 }
+    }
+    catch {close -i $sid}
+    catch {wait -i $sid}
+}
+
+spawn -noecho $qemu {*}$icount_args -M pic32mx3-generic -nographic -monitor none \
+    -serial tcp:127.0.0.1:$port_u3,server,nowait \
+    -serial tcp:127.0.0.1:$port_u1,server,nowait \
+    -serial tcp:127.0.0.1:$port_u2,server,nowait \
+    -kernel $hex
+
+set qspawn $spawn_id
+expect {
+    -i $qspawn -re {RAM size:} {}
+    timeout { puts stderr "timeout: tcp qemu boot (RAM banner)"; exit 1 }
+}
+sleep 0.6
+
+uart_tcp_test $port_u1 1 {u1-tcp}
+uart_tcp_test $port_u2 2 {u2-tcp}
+uart_tcp_test $port_u3 3 {u3-tcp}
+
+catch {close -i $qspawn}
+catch {wait -i $qspawn}
+
+puts stderr "run-cli-test.expect: ok"

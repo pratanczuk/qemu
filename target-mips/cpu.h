@@ -601,6 +601,10 @@ struct CPUMIPSState {
 
     /* Fields for external interrupt controller. */
     void *eic_context;
+    /* PIC32: INTSTAT vector number for VEIC (not the same as Cause.RIPL). */
+    uint32_t eic_vector;
+    /* PIC32: INTCON.MVEC — per-vector IVT spacing vs single 0x200 gateway. */
+    bool eic_multivec;
     void (*eic_timer_irq)(CPUMIPSState *env, int raise);
     void (*eic_soft_irq)(CPUMIPSState *env, int num);
 

@@ -1,0 +1,74 @@
+#!/usr/bin/expect -f
+# timmer_ms / timer_ms quick check on UART1 (second -serial = stdio).
+# Default NO_ICOUNT=1 for a sub-second wall run; unset to test with icount pacing.
+set send_slow {1 0.012}
+set timeout 30
+set qemu [lindex $argv 0]
+set hex [lindex $argv 1]
+if {$qemu eq ""} {
+    set qemu "/data/projects/qemu/build-pic32-qemu/qemu-system-mipsel"
+}
+if {$hex eq ""} {
+    set hex "/data/projects/qemu/tests/pic32mx350-uart-cli/uart-cli-mx350.hex"
+}
+
+if {![info exists env(NO_ICOUNT)]} {
+    set env(NO_ICOUNT) 1
+}
+if {$env(NO_ICOUNT) ne ""} {
+    set icount_args {}
+} elseif {[info exists env(ICOUNT_SHIFT)] && $env(ICOUNT_SHIFT) ne ""} {
+    set icount_args [list -icount "shift=$env(ICOUNT_SHIFT)"]
+} else {
+    set icount_args {-icount shift=auto}
+}
+
+spawn -noecho $qemu {*}$icount_args -M pic32mx3-generic -nographic -monitor none \
+    -serial null -serial stdio -serial null -kernel $hex
+
+expect {
+    -re {\r?\nU1> } {}
+    timeout { puts stderr "timeout: initial U1>"; exit 1 }
+}
+
+send -s "timmer_ms 150\r"
+expect {
+    -re {OK timer_ms} {}
+    timeout { puts stderr "timeout: OK timer_ms (timmer_ms 150)"; exit 1 }
+}
+
+send -s "timer_ms 200\r"
+expect {
+    -re {OK timer_ms} {}
+    timeout { puts stderr "timeout: OK timer_ms (timer_ms 200)"; exit 1 }
+}
+
+send -s "timer1_ms 40\r"
+expect {
+    -re {OK timer1_ms} {}
+    timeout { puts stderr "timeout: OK timer1_ms"; exit 1 }
+}
+send -s "timer2_ms 40\r"
+expect {
+    -re {OK timer2_ms} {}
+    timeout { puts stderr "timeout: OK timer2_ms"; exit 1 }
+}
+send -s "timer3_ms 40\r"
+expect {
+    -re {OK timer3_ms} {}
+    timeout { puts stderr "timeout: OK timer3_ms"; exit 1 }
+}
+send -s "timer4_ms 40\r"
+expect {
+    -re {OK timer4_ms} {}
+    timeout { puts stderr "timeout: OK timer4_ms"; exit 1 }
+}
+send -s "timer5_ms 40\r"
+expect {
+    -re {OK timer5_ms} {}
+    timeout { puts stderr "timeout: OK timer5_ms"; exit 1 }
+}
+
+catch {close -i $spawn_id}
+catch {wait -i $spawn_id}
+puts stderr "run-timer-ms-test.expect: ok"

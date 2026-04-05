@@ -38,6 +38,7 @@
 #include "sysemu/cpus.h"
 #include "sysemu/qtest.h"
 #include "qemu/main-loop.h"
+#include "qemu/timer.h"
 #include "qemu/bitmap.h"
 #include "qemu/seqlock.h"
 #include "qapi-event.h"
@@ -1067,6 +1068,13 @@ static void *qemu_tcg_cpu_thread_fn(void *arg)
             if (deadline == 0) {
                 qemu_clock_notify(QEMU_CLOCK_VIRTUAL);
             }
+            /*
+             * A guest busy-wait never hits qemu_tcg_wait_io_event(), so the
+             * iothread may not run qemu_clock_run_all_timers() for long
+             * stretches.  Timers on QEMU_CLOCK_VIRTUAL_RT (e.g. PIC32MX3
+             * Timer3 when icount is enabled) would then never fire.
+             */
+            qemu_clock_run_timers(QEMU_CLOCK_VIRTUAL_RT);
         }
         qemu_tcg_wait_io_event();
     }
@@ -1358,7 +1366,12 @@ static int tcg_cpu_exec(CPUArchState *env)
     if (use_icount) {
         int64_t count;
         int64_t deadline;
+        int64_t rt_deadline;
         int decr;
+
+        /* Expire host-timed work before budgeting; see rt_deadline below. */
+        qemu_clock_run_timers(QEMU_CLOCK_VIRTUAL_RT);
+
         timers_state.qemu_icount -= (cpu->icount_decr.u16.low
                                     + cpu->icount_extra);
         cpu->icount_decr.u16.low = 0;
@@ -1372,6 +1385,25 @@ static int tcg_cpu_exec(CPUArchState *env)
          */
         if ((deadline < 0) || (deadline > INT32_MAX)) {
             deadline = INT32_MAX;
+        }
+
+        /*
+         * Devices on QEMU_CLOCK_VIRTUAL_RT (e.g. PIC32MX3 Timer3 under -icount)
+         * must be serviced without waiting for a full INT32_MAX-ns virtual slice.
+         * Otherwise one cpu_exec runs for huge host time while RT timers are
+         * already due; run_timers only ran after tcg_exec_all returned.
+         */
+        rt_deadline = qemu_clock_deadline_ns_all(QEMU_CLOCK_VIRTUAL_RT);
+        if (rt_deadline >= 0) {
+            if (rt_deadline > INT32_MAX) {
+                rt_deadline = INT32_MAX;
+            }
+            if (rt_deadline < deadline) {
+                deadline = rt_deadline;
+            }
+        }
+        if (deadline <= 0) {
+            deadline = 1;
         }
 
         count = qemu_icount_round(deadline);
