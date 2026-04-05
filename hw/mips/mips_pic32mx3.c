@@ -37,8 +37,15 @@
 #include "hw/empty_slot.h"
 #include "elf.h"
 #include "qemu/timer.h"
+#include "hw/sysbus.h"
+#include "hw/qdev.h"
+#include "sysemu/qtest.h"
 #include <stdlib.h>
 #include <termios.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <errno.h>
+#include <endian.h>
 
 #define PIC32MX3
 #include "pic32mx.h"
@@ -84,90 +91,176 @@ static char *boot_ptr;
 #define TRACE   0
 
 /*
+ * PIC32MX350F256H interrupt vector numbers.
+ * Source: p32mx350f256h.h (_xxx_VECTOR defines).
+ * These differ from the PIC32MX7xx defines in pic32mx.h.
+ */
+#define MX3_VECT_CT       0
+#define MX3_VECT_CS0      1
+#define MX3_VECT_CS1      2
+#define MX3_VECT_INT0     3
+#define MX3_VECT_T1       4
+#define MX3_VECT_IC1      5
+#define MX3_VECT_OC1      6
+#define MX3_VECT_INT1     7
+#define MX3_VECT_T2       8
+#define MX3_VECT_IC2      9
+#define MX3_VECT_OC2      10
+#define MX3_VECT_INT2     11
+#define MX3_VECT_T3       12
+#define MX3_VECT_IC3      13
+#define MX3_VECT_OC3      14
+#define MX3_VECT_INT3     15
+#define MX3_VECT_T4       16
+#define MX3_VECT_IC4      17
+#define MX3_VECT_OC4      18
+#define MX3_VECT_INT4     19
+#define MX3_VECT_T5       20
+#define MX3_VECT_IC5      21
+#define MX3_VECT_OC5      22
+#define MX3_VECT_AD1      23
+#define MX3_VECT_FSCM     24
+#define MX3_VECT_RTCC     25
+#define MX3_VECT_FCE      26
+#define MX3_VECT_CMP1     27
+#define MX3_VECT_CMP2     28
+/* 29 reserved */
+#define MX3_VECT_SPI1     30
+#define MX3_VECT_U1       31
+#define MX3_VECT_I2C1     32
+#define MX3_VECT_CN       33
+#define MX3_VECT_PMP      34
+#define MX3_VECT_SPI2     35
+#define MX3_VECT_U2       36
+#define MX3_VECT_I2C2     37
+#define MX3_VECT_U3       38
+#define MX3_VECT_U4       39
+/* 40 reserved */
+#define MX3_VECT_CTMU     41
+#define MX3_VECT_DMA0     42
+#define MX3_VECT_DMA1     43
+#define MX3_VECT_DMA2     44
+#define MX3_VECT_DMA3     45
+
+/*
  * PIC32MX350F256H: irq index is the IFS bit position (IFS0: 0–31, IFS1: 32–63,
  * IFS2: 64–95). irq_raise() ORs 1 << irq into the corresponding IFS register.
  */
 static const int irq_to_vector[] = {
     /* IFS0 */
-    PIC32_VECT_CT,      /* 0 */
-    PIC32_VECT_CS0,     /* 1 */
-    PIC32_VECT_CS1,     /* 2 */
-    PIC32_VECT_INT0,    /* 3 */
-    PIC32_VECT_T1,      /* 4 */
-    PIC32_VECT_IC1,     /* 5 IC1EIF */
-    PIC32_VECT_IC1,     /* 6 IC1IF */
-    PIC32_VECT_OC1,     /* 7 */
-    PIC32_VECT_INT1,    /* 8 */
-    PIC32_VECT_T2,      /* 9 */
-    PIC32_VECT_IC2,     /* 10 IC2EIF */
-    PIC32_VECT_IC2,     /* 11 IC2IF */
-    PIC32_VECT_OC2,     /* 12 */
-    PIC32_VECT_INT2,    /* 13 */
-    PIC32_VECT_T3,      /* 14 T3IF */
-    PIC32_VECT_IC3,     /* 15 IC3EIF */
-    PIC32_VECT_IC3,     /* 16 IC3IF */
-    PIC32_VECT_OC3,     /* 17 */
-    PIC32_VECT_INT3,    /* 18 */
-    PIC32_VECT_T4,      /* 19 */
-    PIC32_VECT_IC4,     /* 20 IC4EIF */
-    PIC32_VECT_IC4,     /* 21 IC4IF */
-    PIC32_VECT_OC4,     /* 22 */
-    PIC32_VECT_INT4,    /* 23 */
-    PIC32_VECT_T5,      /* 24 */
-    PIC32_VECT_IC5,     /* 25 IC5EIF */
-    PIC32_VECT_IC5,     /* 26 IC5IF */
-    PIC32_VECT_OC5,     /* 27 */
-    PIC32_VECT_AD1,     /* 28 */
-    PIC32_VECT_FSCM,    /* 29 */
-    PIC32_VECT_RTCC,    /* 30 */
-    PIC32_VECT_FCE,     /* 31 */
+    MX3_VECT_CT,       /* 0  CTIF */
+    MX3_VECT_CS0,      /* 1  CS0IF */
+    MX3_VECT_CS1,      /* 2  CS1IF */
+    MX3_VECT_INT0,     /* 3  INT0IF */
+    MX3_VECT_T1,       /* 4  T1IF */
+    MX3_VECT_IC1,      /* 5  IC1EIF */
+    MX3_VECT_IC1,      /* 6  IC1IF */
+    MX3_VECT_OC1,      /* 7  OC1IF */
+    MX3_VECT_INT1,     /* 8  INT1IF */
+    MX3_VECT_T2,       /* 9  T2IF */
+    MX3_VECT_IC2,      /* 10 IC2EIF */
+    MX3_VECT_IC2,      /* 11 IC2IF */
+    MX3_VECT_OC2,      /* 12 OC2IF */
+    MX3_VECT_INT2,     /* 13 INT2IF */
+    MX3_VECT_T3,       /* 14 T3IF */
+    MX3_VECT_IC3,      /* 15 IC3EIF */
+    MX3_VECT_IC3,      /* 16 IC3IF */
+    MX3_VECT_OC3,      /* 17 OC3IF */
+    MX3_VECT_INT3,     /* 18 INT3IF */
+    MX3_VECT_T4,       /* 19 T4IF */
+    MX3_VECT_IC4,      /* 20 IC4EIF */
+    MX3_VECT_IC4,      /* 21 IC4IF */
+    MX3_VECT_OC4,      /* 22 OC4IF */
+    MX3_VECT_INT4,     /* 23 INT4IF */
+    MX3_VECT_T5,       /* 24 T5IF */
+    MX3_VECT_IC5,      /* 25 IC5EIF */
+    MX3_VECT_IC5,      /* 26 IC5IF */
+    MX3_VECT_OC5,      /* 27 OC5IF */
+    MX3_VECT_AD1,      /* 28 AD1IF */
+    MX3_VECT_FSCM,     /* 29 FSCMIF */
+    MX3_VECT_RTCC,     /* 30 RTCCIF */
+    MX3_VECT_FCE,      /* 31 FCEIF */
     /* IFS1 */
-    PIC32_VECT_CMP1,    /* 32 */
-    PIC32_VECT_CMP2,    /* 33 */
-    -1,                 /* 34 reserved */
-    PIC32_VECT_SPI1,    /* 35 SPI1EIF */
-    PIC32_VECT_SPI1,    /* 36 SPI1RXIF */
-    PIC32_VECT_SPI1,    /* 37 SPI1TXIF */
-    PIC32_VECT_U1,      /* 38 U1EIF */
-    PIC32_VECT_U1,      /* 39 U1RXIF */
-    PIC32_VECT_U1,      /* 40 U1TXIF */
-    PIC32_VECT_I2C1,    /* 41 I2C1BIF */
-    PIC32_VECT_I2C1,    /* 42 I2C1SIF */
-    PIC32_VECT_I2C1,    /* 43 I2C1MIF */
-    PIC32_VECT_CN,      /* 44 CNAIF */
-    PIC32_VECT_CN,      /* 45 CNBIF */
-    PIC32_VECT_CN,      /* 46 CNCIF */
-    PIC32_VECT_CN,      /* 47 CNDIF */
-    PIC32_VECT_CN,      /* 48 CNEIF */
-    PIC32_VECT_CN,      /* 49 CNFIF */
-    PIC32_VECT_CN,      /* 50 CNGIF */
-    PIC32_VECT_PMP,     /* 51 PMPIF */
-    PIC32_VECT_PMP,     /* 52 PMPEIF */
-    PIC32_VECT_SPI2,    /* 53 SPI2EIF */
-    PIC32_VECT_SPI2,    /* 54 SPI2RXIF */
-    PIC32_VECT_SPI2,    /* 55 SPI2TXIF */
-    PIC32_VECT_U2,      /* 56 U2EIF */
-    PIC32_VECT_U2,      /* 57 U2RXIF */
-    PIC32_VECT_U2,      /* 58 U2TXIF */
-    PIC32_VECT_I2C2,    /* 59 I2C2BIF */
-    PIC32_VECT_I2C2,    /* 60 I2C2SIF */
-    PIC32_VECT_I2C2,    /* 61 I2C2MIF */
-    PIC32_VECT_U3,      /* 62 U3EIF */
-    PIC32_VECT_U3,      /* 63 U3RXIF */
+    MX3_VECT_CMP1,     /* 32 CMP1IF */
+    MX3_VECT_CMP2,     /* 33 CMP2IF */
+    -1,                /* 34 reserved */
+    MX3_VECT_SPI1,     /* 35 SPI1EIF */
+    MX3_VECT_SPI1,     /* 36 SPI1RXIF */
+    MX3_VECT_SPI1,     /* 37 SPI1TXIF */
+    MX3_VECT_U1,       /* 38 U1EIF */
+    MX3_VECT_U1,       /* 39 U1RXIF */
+    MX3_VECT_U1,       /* 40 U1TXIF */
+    MX3_VECT_I2C1,     /* 41 I2C1BIF */
+    MX3_VECT_I2C1,     /* 42 I2C1SIF */
+    MX3_VECT_I2C1,     /* 43 I2C1MIF */
+    MX3_VECT_CN,       /* 44 CNAIF */
+    MX3_VECT_CN,       /* 45 CNBIF */
+    MX3_VECT_CN,       /* 46 CNCIF */
+    MX3_VECT_CN,       /* 47 CNDIF */
+    MX3_VECT_CN,       /* 48 CNEIF */
+    MX3_VECT_CN,       /* 49 CNFIF */
+    MX3_VECT_CN,       /* 50 CNGIF */
+    MX3_VECT_PMP,      /* 51 PMPIF */
+    MX3_VECT_PMP,      /* 52 PMPEIF */
+    MX3_VECT_SPI2,     /* 53 SPI2EIF */
+    MX3_VECT_SPI2,     /* 54 SPI2RXIF */
+    MX3_VECT_SPI2,     /* 55 SPI2TXIF */
+    MX3_VECT_U2,       /* 56 U2EIF */
+    MX3_VECT_U2,       /* 57 U2RXIF */
+    MX3_VECT_U2,       /* 58 U2TXIF */
+    MX3_VECT_I2C2,     /* 59 I2C2BIF */
+    MX3_VECT_I2C2,     /* 60 I2C2SIF */
+    MX3_VECT_I2C2,     /* 61 I2C2MIF */
+    MX3_VECT_U3,       /* 62 U3EIF */
+    MX3_VECT_U3,       /* 63 U3RXIF */
     /* IFS2 (MX350 subset) */
-    PIC32_VECT_U3,      /* 64 U3TXIF */
-    PIC32_VECT_U4,      /* 65 U4EIF */
-    PIC32_VECT_U4,      /* 66 U4RXIF */
-    PIC32_VECT_U4,      /* 67 U4TXIF */
-    -1,                 /* 68 */
-    -1,                 /* 69 */
-    -1,                 /* 70 */
-    -1,                 /* 71 CTMUIF (no vect in pic32mx.h) */
-    PIC32_VECT_DMA0,    /* 72 DMA0IF */
-    PIC32_VECT_DMA1,    /* 73 DMA1IF */
-    PIC32_VECT_DMA2,    /* 74 DMA2IF */
-    PIC32_VECT_DMA3,    /* 75 DMA3IF */
+    MX3_VECT_U3,       /* 64 U3TXIF */
+    MX3_VECT_U4,       /* 65 U4EIF */
+    MX3_VECT_U4,       /* 66 U4RXIF */
+    MX3_VECT_U4,       /* 67 U4TXIF */
+    -1,                /* 68 */
+    -1,                /* 69 */
+    -1,                /* 70 */
+    MX3_VECT_CTMU,     /* 71 CTMUIF */
+    MX3_VECT_DMA0,     /* 72 DMA0IF */
+    MX3_VECT_DMA1,     /* 73 DMA1IF */
+    MX3_VECT_DMA2,     /* 74 DMA2IF */
+    MX3_VECT_DMA3,     /* 75 DMA3IF */
 };
+
+/*
+ * PIC32MX350 IPC layout does not match "IPC(irq >> 2), nibble (irq & 3)".
+ * UART{1..4} E/R/T flags share one IP field per peripheral (see IPC7/IPC9).
+ */
+static int pic32mx3_irq_priority(const pic32_t *s, int irq)
+{
+    uint32_t ipc;
+
+    switch (irq) {
+    case 38: case 39: case 40:         /* U1EIF, U1RXIF, U1TXIF -> IPC7.U1IP */
+        ipc = VALUE(IPC7);
+        return (ipc >> 26) & 7;
+    case 56: case 57: case 58:         /* U2* -> IPC9.U2IP */
+        ipc = VALUE(IPC9);
+        return (ipc >> 2) & 7;
+    case 62: case 63: case 64:         /* U3* -> IPC9.U3IP */
+        ipc = VALUE(IPC9);
+        return (ipc >> 18) & 7;
+    case 65: case 66: case 67:         /* U4* -> IPC9.U4IP */
+        ipc = VALUE(IPC9);
+        return (ipc >> 26) & 7;
+    default:
+        {
+            int n = irq >> 2;
+
+            if (n < 0 || n > 12) {
+                return 0;
+            }
+            ipc = VALUE(IPC(n));
+            return (ipc >> (2 + (irq & 3) * 8)) & 7;
+        }
+    }
+}
 
 static void update_irq_status(pic32_t *s)
 {
@@ -195,15 +288,7 @@ static void update_irq_status(pic32_t *s)
                 if (v < 0)
                     continue;
 
-                /*
-                 * Priority/subpriority live in IPC(irq/4), field (irq mod 4).
-                 * Do not use IPC(vector/4): e.g. UART3 IRQs 37–39 use IPC9 while
-                 * vector 31 would incorrectly use IPC7 (RIPL stays 0, VEIC never
-                 * delivers).
-                 */
-                int level = VALUE(IPC(irq >> 2));
-                level >>= 2 + (irq & 3) * 8;
-                level &= 7;
+                int level = pic32mx3_irq_priority(s, irq);
                 if (level > cause_ripl) {
                     vector = v;
                     cause_ripl = level;
@@ -2306,25 +2391,124 @@ static void pic32_init(MachineState *machine, int board_type)
         if (magic[0] == 0x7f && magic[1] == 'E' &&
             magic[2] == 'L'  && magic[3] == 'F')
         {
-            /* ELF firmware image: load via QEMU rom infrastructure. */
-            uint64_t elf_entry;
-            const int big_endian = 0;   /* MIPS32 little-endian */
-            const int clear_lsb = 0;    /* Not ARM Thumb mode */
-            int elf_size = load_elf(machine->kernel_filename,
-                                    cpu_mips_kseg0_to_phys, NULL,
-                                    &elf_entry, NULL, NULL,
-                                    big_endian,
-                                    EM_MIPS,
-                                    clear_lsb);
-            if (elf_size < 0) {
-                error_report("Failed to load ELF firmware '%s' (error %d)",
-                             machine->kernel_filename, elf_size);
+            /*
+             * ELF firmware: load PT_LOAD segments directly into flash RAM
+             * pointers via store_byte.  The generic QEMU rom infrastructure
+             * (load_elf → rom_add_elf_program → rom_load_all) rejects
+             * overlapping physical regions, but PIC32 ELF images routinely
+             * have kseg0 (0x9fc0xxxx) and kseg1 (0xbfc0xxxx) segments that
+             * alias the same boot flash, so we bypass it.
+             */
+            int fd = open(machine->kernel_filename, O_RDONLY);
+            if (fd < 0) {
+                error_report("Failed to open ELF '%s': %s",
+                             machine->kernel_filename, strerror(errno));
                 exit(1);
             }
+            Elf32_Ehdr ehdr;
+            if (read(fd, &ehdr, sizeof(ehdr)) != sizeof(ehdr) ||
+                memcmp(ehdr.e_ident, ELFMAG, SELFMAG) != 0 ||
+                le16toh(ehdr.e_type) != ET_EXEC ||
+                le16toh(ehdr.e_machine) != EM_MIPS) {
+                error_report("'%s' is not a valid MIPS ELF executable",
+                             machine->kernel_filename);
+                close(fd);
+                exit(1);
+            }
+            uint16_t phnum = le16toh(ehdr.e_phnum);
+            uint32_t phoff = le32toh(ehdr.e_phoff);
+            uint64_t elf_entry = (uint64_t)le32toh(ehdr.e_entry);
+            int total_loaded = 0;
+
+            /*
+             * Read all PT_LOAD phdrs into an array, then sort by filesz
+             * descending so that large "background" segments (e.g. the
+             * kseg1 boot flash region 0xbfc00480–0xbfc03000 that includes
+             * zero padding over the vector area) are written first, and
+             * smaller, specific segments (e.g. the kseg0 vectors at
+             * 0x9fc01180) overwrite the correct bytes afterward.
+             */
+            typedef struct {
+                uint32_t paddr;
+                uint32_t filesz;
+                uint32_t offset;
+                int      region; /* 0=flash, 1=ram */
+            } SegInfo;
+
+            SegInfo *segs = g_new0(SegInfo, phnum);
+            int nseg = 0;
+            uint16_t pi;
+            for (pi = 0; pi < phnum; pi++) {
+                Elf32_Phdr phdr;
+                if (lseek(fd, phoff + pi * sizeof(phdr), SEEK_SET) < 0 ||
+                    read(fd, &phdr, sizeof(phdr)) != sizeof(phdr)) {
+                    break;
+                }
+                if (le32toh(phdr.p_type) != PT_LOAD) {
+                    continue;
+                }
+                uint32_t filesz = le32toh(phdr.p_filesz);
+                uint32_t vaddr  = le32toh(phdr.p_vaddr);
+                uint32_t paddr  = vaddr & 0x1fffffffu;
+                if (filesz == 0) {
+                    continue;
+                }
+                int in_prog = (paddr >= PROGRAM_FLASH_START &&
+                               paddr < PROGRAM_FLASH_START + PROGRAM_FLASH_SIZE);
+                int in_boot = (paddr >= BOOT_FLASH_START &&
+                               paddr < BOOT_FLASH_START + BOOT_FLASH_SIZE);
+                int in_ram  = (paddr < DATA_MEM_START + DATA_MEM_SIZE);
+                if (!in_prog && !in_boot && !in_ram) {
+                    continue;
+                }
+                segs[nseg].paddr  = paddr;
+                segs[nseg].filesz = filesz;
+                segs[nseg].offset = le32toh(phdr.p_offset);
+                segs[nseg].region = in_ram ? 1 : 0;
+                nseg++;
+            }
+
+            /* Sort: largest filesz first so contained segments overwrite. */
+            int si, sj;
+            for (si = 0; si < nseg - 1; si++) {
+                for (sj = si + 1; sj < nseg; sj++) {
+                    if (segs[sj].filesz > segs[si].filesz) {
+                        SegInfo tmp = segs[si];
+                        segs[si] = segs[sj];
+                        segs[sj] = tmp;
+                    }
+                }
+            }
+
+            for (si = 0; si < nseg; si++) {
+                uint8_t *buf = g_malloc(segs[si].filesz);
+                if (lseek(fd, segs[si].offset, SEEK_SET) < 0 ||
+                    read(fd, buf, segs[si].filesz) !=
+                        (ssize_t)segs[si].filesz) {
+                    error_report("Failed to read ELF segment at offset %#x",
+                                 segs[si].offset);
+                    g_free(buf);
+                    g_free(segs);
+                    close(fd);
+                    exit(1);
+                }
+                if (segs[si].region) {
+                    cpu_physical_memory_write(segs[si].paddr, buf,
+                                              segs[si].filesz);
+                } else {
+                    uint32_t i;
+                    for (i = 0; i < segs[si].filesz; i++) {
+                        store_byte(segs[si].paddr + i, buf[i]);
+                    }
+                }
+                g_free(buf);
+                total_loaded += segs[si].filesz;
+            }
+            g_free(segs);
+            close(fd);
             printf("Firmware: ELF, %d bytes, entry 0x%08llx\n",
-                   elf_size, (unsigned long long) elf_entry);
+                   total_loaded, (unsigned long long)elf_entry);
             if (bios_name) {
-                /* Optional boot ROM as hex/srec alongside ELF kernel. */
                 pic32_load_hex_file(bios_name, store_byte);
             }
         } else {
@@ -2384,6 +2568,7 @@ static void pic32_init(MachineState *machine, int board_type)
      *     DEVCFG words are still written after load — see pic32mx3_nvm.c)
      */
     /* Base IRQ = IFS1 UxEIF bit index (see irq_to_vector): U1 38, U2 56, U3 62 (+2 = U3TX in IFS2). */
+    s->pbclk_hz = PIC32MX3_PBCLK_HZ;
     pic32_uart_init(s, 0, 38, U1STA, U1MODE);
     pic32_uart_init(s, 1, 56, U2STA, U2MODE);
     pic32_uart_init(s, 2, 62, U3STA, U3MODE);
@@ -2451,6 +2636,36 @@ static void pic32_init(MachineState *machine, int board_type)
 
     pic32_sdcard_reset(s);
     pic32mx3_flash_register_exit_save(s);
+
+    /*
+     * Optional plotter-bridge (host SHM + MMIO) for contrib/qemu-grbl-plugin visualizer.
+     *   PLOTTER_BRIDGE_SHM=/path/to/file     — create with: truncate -s 28 file
+     *   PLOTTER_BRIDGE_CONFIG=/path/to.json  — optional (gpio limits, PWM defaults)
+     * Guest physical: SHM 0x1f400000, GPIO 0x1f400040 (KSEG0 0xbf400000 / +0x40).
+     * Omit env vars when not using the bridge (default).
+     */
+    if (!qtest_enabled()) {
+        const char *pbs = getenv("PLOTTER_BRIDGE_SHM");
+
+        if (pbs && pbs[0]) {
+            DeviceState *pb = qdev_try_create(NULL, "plotter-bridge");
+
+            if (pb) {
+                SysBusDevice *pbd = SYS_BUS_DEVICE(pb);
+                const char *pjson = getenv("PLOTTER_BRIDGE_CONFIG");
+
+                object_property_set_str(OBJECT(pb), pbs, "shm-path", &error_abort);
+                if (pjson && pjson[0]) {
+                    object_property_set_str(OBJECT(pb), pjson, "plotter-config-file",
+                                            &error_abort);
+                }
+                qdev_init_nofail(pb);
+                sysbus_mmio_map(pbd, 0, 0x1f400000);
+                sysbus_mmio_map(pbd, 1, 0x1f400040);
+            }
+        }
+    }
+
     pic32_pass_signal_chars();
 }
 

@@ -31,3 +31,6 @@
 [submodule "roms/u-boot"]
 	path = roms/u-boot
 	url = git://git.qemu-project.org/u-boot.git
+[submodule "contrib/qemu-grbl-plugin"]
+	path = contrib/qemu-grbl-plugin
+	url = git@github.com:pratanczuk/qemu_grbl_plugin.git

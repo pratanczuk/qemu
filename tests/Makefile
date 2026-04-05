@@ -185,6 +185,9 @@ gcov-files-x86_64-y = $(subst i386-softmmu/,x86_64-softmmu/,$(gcov-files-i386-y)
 check-qtest-mips-y = tests/endianness-test$(EXESUF)
 check-qtest-mips64-y = tests/endianness-test$(EXESUF)
 check-qtest-mips64el-y = tests/endianness-test$(EXESUF)
+ifeq ($(CONFIG_PLOTTER_BRIDGE),y)
+check-qtest-mipsel-y += tests/plotter-bridge-test$(EXESUF)
+endif
 check-qtest-ppc-y = tests/endianness-test$(EXESUF)
 check-qtest-ppc64-y = tests/endianness-test$(EXESUF)
 check-qtest-sh4-y = tests/endianness-test$(EXESUF)
@@ -352,6 +355,7 @@ libqos-virtio-obj-y = $(libqos-pc-obj-y) tests/libqos/virtio.o tests/libqos/virt
 tests/rtc-test$(EXESUF): tests/rtc-test.o
 tests/m48t59-test$(EXESUF): tests/m48t59-test.o
 tests/endianness-test$(EXESUF): tests/endianness-test.o
+tests/plotter-bridge-test$(EXESUF): tests/plotter-bridge-test.o
 tests/spapr-phb-test$(EXESUF): tests/spapr-phb-test.o $(libqos-obj-y)
 tests/fdc-test$(EXESUF): tests/fdc-test.o
 tests/ide-test$(EXESUF): tests/ide-test.o $(libqos-pc-obj-y)

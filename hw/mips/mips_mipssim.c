@@ -36,9 +36,12 @@
 #include "hw/loader.h"
 #include "elf.h"
 #include "hw/sysbus.h"
+#include "hw/qdev.h"
+#include "qom/object.h"
 #include "exec/address-spaces.h"
 #include "qemu/error-report.h"
 #include "sysemu/qtest.h"
+#include <stdlib.h>
 
 static struct _loaderparams {
     int ram_size;
@@ -229,6 +232,35 @@ mips_mipssim_init(MachineState *machine)
     if (nd_table[0].used)
         /* MIPSnet uses the MIPS CPU INT0, which is interrupt 2. */
         mipsnet_init(0x4200, env->irq[2], &nd_table[0]);
+
+    /*
+     * QTest: optional plotter-bridge at fixed MMIO (see tests/plotter-bridge-test.c).
+     * Omitted when the device is not linked in.
+     */
+    if (qtest_enabled()) {
+        DeviceState *pb = qdev_try_create(NULL, "plotter-bridge");
+        if (pb) {
+            SysBusDevice *sbd = SYS_BUS_DEVICE(pb);
+
+            /* QTest: disable encoder timer so MMIO tests own encoder/pulse fields. */
+            object_property_set_int(OBJECT(pb), 0, "encoder-period-ns",
+                                    &error_abort);
+            object_property_set_int(OBJECT(pb), 0, "sensor-poll-period-ns",
+                                    &error_abort);
+            {
+                const char *pcfg = getenv("QTEST_PLOTTER_CONFIG");
+
+                if (pcfg && pcfg[0]) {
+                    object_property_set_str(OBJECT(pb), pcfg,
+                                            "plotter-config-file",
+                                            &error_abort);
+                }
+            }
+            qdev_init_nofail(pb);
+            sysbus_mmio_map(sbd, 0, 0x1f800000);
+            sysbus_mmio_map(sbd, 1, 0x1f800040);
+        }
+    }
 }
 
 static QEMUMachine mips_mipssim_machine = {
