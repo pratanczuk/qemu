@@ -229,37 +229,30 @@ static const int irq_to_vector[] = {
 };
 
 /*
- * PIC32MX350 IPC layout does not match "IPC(irq >> 2), nibble (irq & 3)".
- * UART{1..4} E/R/T flags share one IP field per peripheral (see IPC7/IPC9).
+ * PIC32MX350 IPC registers are indexed by *vector number*, not IFS bit
+ * position.  Multiple IFS bits can share one vector (e.g. ICxEIF + ICxIF,
+ * UxEIF + UxRXIF + UxTXIF), so the mapping irq→IPC is:
+ *   vec = irq_to_vector[irq];   IPC(vec >> 2), field (vec & 3).
  */
 static int pic32mx3_irq_priority(const pic32_t *s, int irq)
 {
+    int v;
+    int n;
     uint32_t ipc;
 
-    switch (irq) {
-    case 38: case 39: case 40:         /* U1EIF, U1RXIF, U1TXIF -> IPC7.U1IP */
-        ipc = VALUE(IPC7);
-        return (ipc >> 26) & 7;
-    case 56: case 57: case 58:         /* U2* -> IPC9.U2IP */
-        ipc = VALUE(IPC9);
-        return (ipc >> 2) & 7;
-    case 62: case 63: case 64:         /* U3* -> IPC9.U3IP */
-        ipc = VALUE(IPC9);
-        return (ipc >> 18) & 7;
-    case 65: case 66: case 67:         /* U4* -> IPC9.U4IP */
-        ipc = VALUE(IPC9);
-        return (ipc >> 26) & 7;
-    default:
-        {
-            int n = irq >> 2;
-
-            if (n < 0 || n > 12) {
-                return 0;
-            }
-            ipc = VALUE(IPC(n));
-            return (ipc >> (2 + (irq & 3) * 8)) & 7;
-        }
+    if (irq < 0 || irq >= (int)(sizeof(irq_to_vector) / sizeof(irq_to_vector[0]))) {
+        return 0;
     }
+    v = irq_to_vector[irq];
+    if (v < 0) {
+        return 0;
+    }
+    n = v >> 2;
+    if (n > 12) {
+        return 0;
+    }
+    ipc = VALUE(IPC(n));
+    return (ipc >> (2 + (v & 3) * 8)) & 7;
 }
 
 static void update_irq_status(pic32_t *s)
@@ -421,8 +414,9 @@ static void pic32_soft_irq(CPUMIPSState *env, int num)
     irq_raise(s, num + 1);
 }
 
-/* PBCLK for PIC32MX350 generic board (matches DEVCFG / cpu_mips_clock_init). */
-#define PIC32MX3_PBCLK_HZ 80000000ull
+/* PBCLK for PIC32MX350 generic board.
+ * Must match the firmware's F_PB_HZ (48 MHz for Cricut Joy config). */
+#define PIC32MX3_PBCLK_HZ 48000000ull
 
 /*
  * T1–T5 period match uses the same PBCLK-derived nanosecond period.
@@ -480,9 +474,21 @@ static uint64_t pic32mx3_tmr_period_ns(pic32_t *s, int idx)
         return pic32mx3_typeb_period_ns(VALUE(T2CON), (uint16_t)VALUE(PR2));
     case 2:
         return pic32mx3_typeb_period_ns(VALUE(T3CON), (uint16_t)VALUE(PR3));
-    case 3:
-        return pic32mx3_typeb_period_ns(VALUE(T4CON), (uint16_t)VALUE(PR4));
+    case 3: {
+        uint32_t t4con = VALUE(T4CON);
+        if (t4con & (1u << 3)) {
+            /* T32: 32-bit mode — period is PR5:PR4 combined. */
+            uint32_t pr32 = ((uint32_t)(uint16_t)VALUE(PR5) << 16)
+                          | (uint32_t)(uint16_t)VALUE(PR4);
+            return pic32mx3_typeb_period_ns(t4con, pr32);
+        }
+        return pic32mx3_typeb_period_ns(t4con, (uint16_t)VALUE(PR4));
+    }
     case 4:
+        /* If T4CON.T32 is active, TMR5 is not standalone — return huge period. */
+        if (VALUE(T4CON) & (1u << 3)) {
+            return 1000000000ull;
+        }
         return pic32mx3_typeb_period_ns(VALUE(T5CON), (uint16_t)VALUE(PR5));
     default:
         return 1000000ull;
@@ -549,9 +555,22 @@ static void pic32mx3_tmr_cb(void *opaque)
         break;
     case 3:
         if (!(VALUE(T4CON) & 0x8000u)) {
+            if (getenv("QEMU_PIC32_TRACE_T32"))
+                fprintf(stderr, "TMR4_CB idx=3 ON=0 → skip\n");
             return;
         }
         VALUE(TMR4) = 0;
+        if (VALUE(T4CON) & (1u << 3)) {
+            /* T32: 32-bit mode — clear TMR5 too, fire T5IF (slave). */
+            VALUE(TMR5) = 0;
+            if (getenv("QEMU_PIC32_TRACE_T32"))
+                fprintf(stderr, "TMR4_CB T32 fire T5IF, IEC0=0x%08x\n",
+                        VALUE(IEC0));
+            irq_raise(s, pic32mx3_tmr_ifs_irq[4]); /* T5IF */
+            pic32mx3_oc_raise_for_timer(s, idx);
+            pic32mx3_tmr_recompute(s, idx);
+            return;
+        }
         break;
     case 4:
         if (!(VALUE(T5CON) & 0x8000u)) {
@@ -584,6 +603,8 @@ static void pic32mx3_tmr_recompute(pic32_t *s, int idx)
         return;
     }
     if (!(tcon & 0x8000u)) {
+        if (idx == 3 && getenv("QEMU_PIC32_TRACE_T32"))
+            fprintf(stderr, "TMR4_RECOMPUTE idx=3 ON=0 → timer_del\n");
         timer_del(s->tmr_timer[idx]);
         return;
     }
@@ -593,6 +614,10 @@ static void pic32mx3_tmr_recompute(pic32_t *s, int idx)
         if (per < 1000ull) {
             per = 1000ull;
         }
+        if (idx == 3 && getenv("QEMU_PIC32_TRACE_T32"))
+            fprintf(stderr, "TMR4_RECOMPUTE idx=3 per=%llu ns T4CON=0x%08x PR4=0x%04x PR5=0x%04x\n",
+                    (unsigned long long)per, tcon,
+                    (unsigned)VALUE(PR4), (unsigned)VALUE(PR5));
         timer_mod(s->tmr_timer[idx],
                   pic32mx3_tmr3_clock_get_ns() + per);
     }
@@ -1602,8 +1627,7 @@ static void io_write32(pic32_t *s, unsigned offset, unsigned data, const char **
     WRITEOP(IPC10); goto irq;
     WRITEOP(IPC11); goto irq;
     WRITEOP(IPC12);
-irq:    pic32mx3_tmrs_recompute_all(s);
-        update_irq_status(s);
+irq:    update_irq_status(s);
         return;
 
     /*-------------------------------------------------------------------------
@@ -2052,6 +2076,9 @@ irq:    pic32mx3_tmrs_recompute_all(s);
         *namep = "PR5";
         VALUE(PR5) = write_op(VALUE(PR5), data, offset);
         pic32mx3_tmr_recompute(s, 4);
+        /* If T4CON.T32, PR5 is the high half of the 32-bit period. */
+        if (VALUE(T4CON) & (1u << 3))
+            pic32mx3_tmr_recompute(s, 3);
         return;
 
     /*-------------------------------------------------------------------------
@@ -2533,7 +2560,7 @@ static void pic32_init(MachineState *machine, int board_type)
 
     /* CPU runs at 80MHz.
      * Count register increases at half this rate. */
-    cpu_mips_clock_init(env, 40*1000*1000);
+    cpu_mips_clock_init(env, 24*1000*1000);  /* Count = SYS_CLK/2 = 48/2 = 24 MHz */
 
     /*
      * Initialize board-specific parameters.
@@ -2639,7 +2666,7 @@ static void pic32_init(MachineState *machine, int board_type)
 
     /*
      * Optional plotter-bridge (host SHM + MMIO) for contrib/qemu-grbl-plugin visualizer.
-     *   PLOTTER_BRIDGE_SHM=/path/to/file     — create with: truncate -s 28 file
+     *   PLOTTER_BRIDGE_SHM=/path/to/file     — create with: truncate -s 32 file
      *   PLOTTER_BRIDGE_CONFIG=/path/to.json  — optional (gpio limits, PWM defaults)
      * Guest physical: SHM 0x1f400000, GPIO 0x1f400040 (KSEG0 0xbf400000 / +0x40).
      * Omit env vars when not using the bridge (default).

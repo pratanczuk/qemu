@@ -1,0 +1,20 @@
+#!/usr/bin/expect -f
+# Smoke test: grbl_bridge_test firmware on UART1 (second -serial = stdio).
+set timeout 60
+set qemu [lindex $argv 0]
+set hex [lindex $argv 1]
+if {$qemu eq ""} {
+    set qemu "/data/projects/qemu/mipsel-softmmu/qemu-system-mipsel"
+}
+if {$hex eq ""} {
+    set hex "/data/projects/qemu/tests/pic32mx350-grbl-bridge/grbl-bridge-test-mx350.hex"
+}
+
+spawn -noecho $qemu -M pic32mx3-generic -nographic -monitor none \
+    -serial null -serial stdio -serial null -icount shift=auto -kernel $hex
+
+expect {
+    -re {OK grbl_bridge:.*\r\n} { puts "run-grbl-bridge-test.expect: ok"; exit 0 }
+    -re {WARN grbl_bridge:.*\r\n} { puts "run-grbl-bridge-test.expect: ok (warn)"; exit 0 }
+    timeout { puts stderr "timeout waiting for OK/WARN grbl_bridge"; exit 1 }
+}

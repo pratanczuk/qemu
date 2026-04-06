@@ -974,6 +974,9 @@ static void plotter_bridge_gpio_write(void *opaque, hwaddr addr, uint64_t data,
         s->pwm_duty[0] = (uint8_t)(nval & 0xff);
         s->pwm_duty[1] = (uint8_t)((nval >> 8) & 0xff);
         s->pwm_duty[2] = (uint8_t)((nval >> 16) & 0xff);
+        shm->pwm_duty[0] = s->pwm_duty[0];
+        shm->pwm_duty[1] = s->pwm_duty[1];
+        shm->pwm_duty[2] = s->pwm_duty[2];
         break;
     default:
         break;
@@ -1012,6 +1015,9 @@ static void plotter_bridge_reset(DeviceState *dev)
     s->quad_phase[0] = s->quad_phase[1] = s->quad_phase[2] = 0;
     s->vgpio_in = 0;
     plotter_bridge_pwm_reset_state(s);
+    shm->pwm_duty[0] = s->pwm_duty[0];
+    shm->pwm_duty[1] = s->pwm_duty[1];
+    shm->pwm_duty[2] = s->pwm_duty[2];
 
     qemu_set_irq(s->sensor_irq[0], 0);
     qemu_set_irq(s->sensor_irq[1], 0);

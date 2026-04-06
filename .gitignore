@@ -103,3 +103,5 @@ cscope.*
 tags
 TAGS
 *~
+/AGENTS.md
+/tests/pic32mx350-uart-cli/PROPOSAL-grblhal-uart3-isr-test.md
